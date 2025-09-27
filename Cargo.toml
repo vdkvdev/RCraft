@@ -1,6 +1,6 @@
 [package]
 name = "rcraft"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 
 [dependencies]
@@ -18,3 +18,4 @@ zip = "0.6"
 walkdir = "2.3"
 dirs = "5.0"
 path-slash = "0.2"
+semver = "1.0"

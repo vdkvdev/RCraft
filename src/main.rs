@@ -286,8 +286,9 @@ impl MinecraftLauncher {
                                     }
                                     Ok::<(), anyhow::Error>(())
                                 })();
-                                if let Err(e) = extraction_result {
-                                    println!("WARNING: Could not extract natives from {}: {}", native_zip_path.display(), e);
+
+                                if extraction_result.is_err() {
+                                    // Suppress warnings for failed native extraction
                                 }
                             }
                         }
@@ -296,10 +297,10 @@ impl MinecraftLauncher {
             }
         }
         // List extracted natives for debugging
-        let natives_files = std::fs::read_dir(&natives_dir)?
-            .filter_map(|e| e.ok())
-            .map(|e| e.file_name().to_string_lossy().into_owned())
-            .collect::<Vec<_>>();
+        // let natives_files = std::fs::read_dir(&natives_dir)?
+        //     .filter_map(|e| e.ok())
+        //     .map(|e| e.file_name().to_string_lossy().into_owned())
+        //     .collect::<Vec<_>>();
         // println!("Natives extracted: {:?}", natives_files);
         // progress.finish_with_message("Version, JAR, libraries and natives downloaded successfully");
         Ok(())
@@ -308,7 +309,7 @@ impl MinecraftLauncher {
     async fn build_classpath(&self, version: &str) -> Result<String> {
         let version_dir = self.config.versions_dir.join(version);
         let version_file = version_dir.join(format!("{}.json", version));
-        let version_data = fs::read_to_string(&version_file).await?;
+let version_data = tokio::fs::read_to_string(&version_file).await?;
         #[derive(Deserialize)]
         struct VersionJson {
             libraries: Vec<Library>,
@@ -387,8 +388,12 @@ impl MinecraftLauncher {
             if let Some(mut stderr) = child.stderr.take() {
                 let mut err = String::new();
                 stderr.read_to_string(&mut err)?;
-                println!("{}", style("Error running Minecraft").red());
-                println!("{}", err);
+                if err.contains("UnsatisfiedLinkError") || err.contains("lwjgl") {
+                    println!("{}", style("Version not supported currently, try a version equal or superior to 1.13").red());
+                } else {
+                    println!("{}", style("Error running Minecraft").red());
+                    println!("{}", err);
+                }
             }
         }
 
@@ -419,8 +424,20 @@ impl MinecraftLauncher {
 
         anyhow::bail!("Could not find installed Java")
     }
+    }
+fn get_total_ram_mb() -> Result<u32> {
+    let content = std::fs::read_to_string("/proc/meminfo")?;
+    for line in content.lines() {
+        if line.starts_with("MemTotal:") {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 2 {
+                let kb: u64 = parts[1].parse()?;
+                return Ok((kb / 1024) as u32);
+            }
+        }
+    }
+    anyhow::bail!("Could not find MemTotal in /proc/meminfo");
 }
-
 #[tokio::main]
 async fn main() -> Result<()> {
     let term = Term::stdout();
@@ -433,7 +450,7 @@ async fn main() -> Result<()> {
 ██╔══██╗██║     ██╔══██╗██╔══██║██╔══╝     ██║
 ██║  ██║╚██████╗██║  ██║██║  ██║██║        ██║
  ═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝        ╚═╝
-              v0.1 - by @vdkvdev
+              v0.2 - by @vdkvdev
 "#).fg(Color::Yellow).bold());
 
     let args = Args::parse();
@@ -459,7 +476,7 @@ async fn main() -> Result<()> {
     } else {
         loop {
             let input: String = Input::<String>::new()
-                .with_prompt(&style("Select version. ('1.21', '1.20.4', '1.19' etc...)").fg(Color::Green).to_string())
+                .with_prompt(&style("Select version. (Only from 1.13 to 1.21.8)").fg(Color::Green).to_string())
                 .interact()?;
             if versions.iter().any(|v| v.id == input) {
                 break input;
@@ -473,22 +490,15 @@ async fn main() -> Result<()> {
     let ram_mb = if let Some(ram) = args.ram {
         ram
     } else {
-        Input::<u32>::new()
-            .with_prompt(&style("Select RAM in MB. ('4096', '8192' etc... Minimum 1024)").fg(Color::Green).to_string())
-            .validate_with(|input: &u32| {
-                if *input >= 1024 {
-                    Ok(())
-                } else {
-                    Err("RAM must be at least 1024 MB".to_string())
-                }
-            })
-            .interact()?
+        let total_ram = get_total_ram_mb()?;
+
+        total_ram
     };
 
     println!("\n{}", style("Configuration:").bold());
     println!("Username: {}", username);
     println!("Version: {}", version);
-    println!("RAM: {} MB", ram_mb);
+
 
     // Check if version is downloaded
     let version_dir = launcher.config.versions_dir.join(&version);
