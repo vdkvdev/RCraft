@@ -5,12 +5,8 @@
 ## Screenshot
 
 <div align="center">
-  <img src="ss.png" alt="RCraft CLI Launcher Screenshot"/>
+  <img src="ss/ss.png" alt="RCraft CLI Launcher Screenshot"/>
 </div>
-
-## Feature
-
-- Seamless downloading of Minecraft assets, libraries, and natives.
 
 ## Requirements
 
@@ -20,42 +16,27 @@
 
 ## Installation
 
-1. Clone or download the project to your local machine.
-2. Navigate to the project directory:
+1. Navigate to the project directory:
    ```bash
    cd RCraft
    ```
-3. Install dependencies:
+2. Install dependencies:
    ```bash
    cargo build --release
    ```
-   This compiles the project with all Rust dependencies (e.g., clap, dialoguer, console, tokio, etc.).
+   This compiles the project with all dependencies.
 
 ## Usage
 
-Run the launcher:
+Run the launcher with positional arguments:
 ```bash
-cargo run
+./rcraft <username> <minecraft_version>
 ```
 
-### Steps in Interactive Mode
-
-1. Prompts for username (validated for minimum length).
-2. Prompts for Minecraft version (validated against Mojang's version list).
-3. Prompts for RAM allocation (validated for minimum 1024 MB).
-4. Downloads necessary files if not present (shows progress).
-5. Launches Minecraft with the specified settings.
-
-## Technologies Used
-
-- **Rust**: Core language.
-- **clap**: For command-line argument parsing.
-- **dialoguer**: For interactive user inputs with validation.
-- **console**: For terminal styling (colors, ASCII art).
-- **tokio**: For asynchronous operations.
-- **reqwest**: For HTTP requests to download files.
-- **zip**: For extracting downloaded assets.
-- **indicatif**: For progress bars during downloads.
+Example:
+```bash
+./rcraft vdkvdev 1.13
+```
 
 ## Notes
 

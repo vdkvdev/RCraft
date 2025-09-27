@@ -1,28 +1,17 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::Parser;
-use console::{style, Term, Color};
-use dialoguer::Input;
-use indicatif::{ProgressBar, ProgressStyle};
 use serde::{Deserialize, Serialize};
+use std::env;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use tokio::fs;
-use std::io::Read;
 
 #[derive(Parser, Debug)]
-#[command(author, version, about, long_about = None)]
+#[command(author, about, long_about = None, disable_help_flag = true, disable_version_flag = true)]
 struct Args {
-    /// Minecraft username (optional)
-    #[arg(short, long)]
-    username: Option<String>,
-
-    /// Minecraft version (optional)
-    #[arg(short, long, value_name = "MINECRAFT_VERSION")]
-    minecraft_version: Option<String>,
-
-    /// RAM in MB (optional)
-    #[arg(short, long)]
-    ram: Option<u32>,
+    username: String,
+    minecraft_version: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -118,9 +107,8 @@ struct LauncherConfig {
 
 impl LauncherConfig {
     fn new() -> Result<Self> {
-        let minecraft_dir = dirs::data_dir()
-            .context("Could not find data directory")?
-            .join(".minecraft");
+        let home = env::var("HOME").unwrap();
+        let minecraft_dir = PathBuf::from(home).join(".minecraft");
 
         Ok(Self {
             versions_dir: minecraft_dir.join("versions"),
@@ -166,20 +154,14 @@ impl MinecraftLauncher {
     }
 
     async fn download_version(&self, version: &MinecraftVersion) -> Result<()> {
-        println!("{}", style("Downloading version...").cyan());
+        println!("Downloading version...");
 
         let version_dir = self.config.versions_dir.join(&version.id);
         fs::create_dir_all(&version_dir).await?;
         let natives_dir = version_dir.join("natives");
         fs::create_dir_all(&natives_dir).await?;
 
-        let progress = ProgressBar::new_spinner();
-        progress.set_style(
-            ProgressStyle::default_spinner()
-                .template("{spinner:.green} {wide_msg}")
-                .unwrap()
-        );
-        progress.set_message("Downloading version files...");
+
 
         // Download the version file
         let version_response = reqwest::get(&version.url).await?;
@@ -207,7 +189,7 @@ impl MinecraftLauncher {
         if let Some(client) = version_json.downloads.client {
             let jar_url = client.url;
             let jar_path = version_dir.join(format!("{}.jar", version.id));
-            progress.set_message("Downloading client.jar...");
+
             let resp = reqwest::get(&jar_url).await?;
             let bytes = resp.bytes().await?.to_vec();
             let mut out = tokio::fs::File::create(&jar_path).await?;
@@ -343,7 +325,7 @@ let version_data = tokio::fs::read_to_string(&version_file).await?;
         username: &str,
         ram_mb: u32,
     ) -> Result<()> {
-        println!("{}", style("Launching Minecraft...").green());
+        println!("Launching Minecraft...");
 
         let java_path = self.find_java()?;
         let version_dir = self.config.versions_dir.join(version);
@@ -351,7 +333,7 @@ let version_data = tokio::fs::read_to_string(&version_file).await?;
         let natives_dir = version_dir.join("natives");
 
         if !jar_path.exists() {
-            println!("{}", style("Error: Version not downloaded").red());
+            println!("Error: Version not downloaded");
             return Ok(());
         }
         // Build full classpath
@@ -389,9 +371,9 @@ let version_data = tokio::fs::read_to_string(&version_file).await?;
                 let mut err = String::new();
                 stderr.read_to_string(&mut err)?;
                 if err.contains("UnsatisfiedLinkError") || err.contains("lwjgl") {
-                    println!("{}", style("Version not supported currently, try a version equal or superior to 1.13").red());
+                    println!("Version not supported currently, try a version equal or superior to 1.13");
                 } else {
-                    println!("{}", style("Error running Minecraft").red());
+                    println!("Error running Minecraft");
                     println!("{}", err);
                 }
             }
@@ -401,28 +383,34 @@ let version_data = tokio::fs::read_to_string(&version_file).await?;
     }
 
     fn find_java(&self) -> Result<PathBuf> {
-        // Search for Java in PATH
-        if let Ok(output) = Command::new("which").arg("java").output() {
-            if output.status.success() {
-                let java_path = String::from_utf8(output.stdout)?;
-                return Ok(PathBuf::from(java_path.trim()));
-            }
+    // Search for Java8 first
+    if let Ok(output) = Command::new("which").arg("java8").output() {
+        if output.status.success() {
+            let java_path = String::from_utf8(output.stdout)?;
+            return Ok(PathBuf::from(java_path.trim()));
         }
-
-        // Search in common locations
-        let common_paths = vec![
-            "/usr/bin/java",
-            "/usr/local/bin/java",
-            "/opt/java/bin/java",
-        ];
-
-        for path in common_paths {
-            if Path::new(path).exists() {
-                return Ok(PathBuf::from(path));
-            }
+    }
+    // Search for Java
+    if let Ok(output) = Command::new("which").arg("java").output() {
+        if output.status.success() {
+            let java_path = String::from_utf8(output.stdout)?;
+            return Ok(PathBuf::from(java_path.trim()));
         }
-
-        anyhow::bail!("Could not find installed Java")
+    }
+    // Search in common locations
+    let common_paths = vec![
+        "/usr/lib/jvm/java-8-openjdk-amd64/bin/java",
+        "/usr/lib/jvm/java-8-openjdk-i386/bin/java",
+        "/usr/bin/java",
+        "/usr/local/bin/java",
+        "/opt/java/bin/java",
+    ];
+    for path in common_paths {
+        if Path::new(path).exists() {
+            return Ok(PathBuf::from(path));
+        }
+    }
+    anyhow::bail!("Could not find installed Java (try installing openjdk-8-jdk)")
     }
     }
 fn get_total_ram_mb() -> Result<u32> {
@@ -440,10 +428,7 @@ fn get_total_ram_mb() -> Result<u32> {
 }
 #[tokio::main]
 async fn main() -> Result<()> {
-    let term = Term::stdout();
-    term.clear_screen()?;
-
-    println!("{}", style(r#"
+    println!("{}", r#"
 ██████╗  ██████╗██████╗  █████╗ ███████╗████████╗
 ██╔══██╗██╔════╝██╔══██╗██╔══██╗██╔════╝╚══██╔══╝
 ██████╔╝██║     ██████╔╝███████║█████╗     ██║
@@ -451,7 +436,7 @@ async fn main() -> Result<()> {
 ██║  ██║╚██████╗██║  ██║██║  ██║██║        ██║
  ═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝        ╚═╝
               v0.2 - by @vdkvdev
-"#).fg(Color::Yellow).bold());
+"#);
 
     let args = Args::parse();
     let launcher = MinecraftLauncher::new()?;
@@ -460,44 +445,16 @@ async fn main() -> Result<()> {
     launcher.config.ensure_directories().await?;
 
     // Get username
-    let username = if let Some(name) = args.username {
-        name
-    } else {
-        Input::<String>::new()
-            .with_prompt(&style("Enter your username").fg(Color::Green).to_string())
-            .validate_with(|input: &String| if input.len() >= 5 { Ok(()) } else { Err("Username must be at least 5 characters".to_string()) })
-            .interact()?
-    };
+    let username = args.username;
 
     // Get version
     let versions = launcher.get_available_versions().await?;
-    let version = if let Some(ver) = args.minecraft_version {
-        ver
-    } else {
-        loop {
-            let input: String = Input::<String>::new()
-                .with_prompt(&style("Select version. (Only from 1.13 to 1.21.8)").fg(Color::Green).to_string())
-                .interact()?;
-            if versions.iter().any(|v| v.id == input) {
-                break input;
-            } else {
-                println!("Invalid version, try again.");
-            }
-        }
-    };
+    let version = args.minecraft_version;
 
     // Get RAM
-    let ram_mb = if let Some(ram) = args.ram {
-        ram
-    } else {
-        let total_ram = get_total_ram_mb()?;
+    let ram_mb = get_total_ram_mb()?;
 
-        total_ram
-    };
 
-    println!("\n{}", style("Configuration:").bold());
-    println!("Username: {}", username);
-    println!("Version: {}", version);
 
 
     // Check if version is downloaded
@@ -511,11 +468,11 @@ async fn main() -> Result<()> {
     let need_download = !jar_path.exists() || !jopt_simple_path.exists() || !natives_exist;
 
     if need_download {
-        println!("\n{}", style("Downloading version files...").yellow());
+        println!("\nDownloading version files...");
         if let Some(target_version) = versions.iter().find(|v| v.id == version) {
             launcher.download_version(target_version).await?;
         } else {
-            println!("{}", style("Error: Version not found").red());
+            println!("Error: Version not found");
             return Ok(());
         }
     }
