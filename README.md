@@ -2,12 +2,6 @@
 
 🦀 An ultra-lightweight Minecraft launcher in CLI, written in Rust, which automatically downloads the necessary files and runs the game.
 
-## Screenshot
-
-<div align="center">
-  <img src="ss/ss.png" alt="RCraft CLI Launcher Screenshot"/>
-</div>
-
 ## Requirements
 
 - Rust (latest stable version recommended).
