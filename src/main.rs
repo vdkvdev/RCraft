@@ -180,10 +180,26 @@ impl MinecraftLauncher {
         struct VersionJson {
             downloads: VersionJsonDownloads,
             libraries: Vec<Library>,
+            #[serde(rename = "assetIndex")]
+            asset_index: Option<AssetIndex>,
         }
         #[derive(Deserialize)]
         struct DownloadInfo {
             url: String,
+        }
+        #[derive(Deserialize)]
+        struct AssetIndex {
+            id: String,
+            url: String,
+        }
+        #[derive(Deserialize)]
+        struct AssetIndexJson {
+            objects: std::collections::HashMap<String, AssetObject>,
+        }
+        #[derive(Deserialize)]
+        struct AssetObject {
+            hash: String,
+            size: u64,
         }
         let version_json: VersionJson = serde_json::from_str(&version_data)?;
         if let Some(client) = version_json.downloads.client {
@@ -285,6 +301,38 @@ impl MinecraftLauncher {
         //     .collect::<Vec<_>>();
         // println!("Natives extracted: {:?}", natives_files);
         // progress.finish_with_message("Version, JAR, libraries and natives downloaded successfully");
+        // Download assets
+        if let Some(asset_index) = &version_json.asset_index {
+            let indexes_dir = self.config.assets_dir.join("indexes");
+            fs::create_dir_all(&indexes_dir).await?;
+            let index_path = indexes_dir.join(format!("{}.json", asset_index.id));
+
+            let resp = reqwest::get(&asset_index.url).await?;
+            let bytes = resp.bytes().await?.to_vec();
+            let mut out = tokio::fs::File::create(&index_path).await?;
+            use tokio::io::AsyncWriteExt;
+            out.write_all(&bytes).await?;
+
+            let index_data = String::from_utf8(bytes)?;
+            let asset_index_json: AssetIndexJson = serde_json::from_str(&index_data)?;
+
+            for (_key, obj) in asset_index_json.objects {
+                let hash_prefix = &obj.hash[0..2];
+                let object_dir = self.config.assets_dir.join("objects").join(hash_prefix);
+                fs::create_dir_all(&object_dir).await?;
+                let object_path = object_dir.join(&obj.hash);
+
+                if !object_path.exists() {
+                    let object_url = format!("https://resources.download.minecraft.net/{}/{}", hash_prefix, obj.hash);
+
+                    let resp = reqwest::get(&object_url).await?;
+                    let bytes = resp.bytes().await?.to_vec();
+                    let mut out = tokio::fs::File::create(&object_path).await?;
+                    use tokio::io::AsyncWriteExt;
+                    out.write_all(&bytes).await?;
+                }
+            }
+        }
         Ok(())
     }
 
@@ -325,6 +373,15 @@ let version_data = tokio::fs::read_to_string(&version_file).await?;
         username: &str,
         ram_mb: u32,
     ) -> Result<()> {
+        #[derive(Deserialize)]
+        struct VersionJson {
+            #[serde(rename = "assetIndex")]
+            asset_index: Option<AssetIndex>,
+        }
+        #[derive(Deserialize)]
+        struct AssetIndex {
+            id: String,
+        }
         println!("Launching Minecraft...");
 
         let java_path = self.find_java()?;
@@ -353,8 +410,18 @@ let version_data = tokio::fs::read_to_string(&version_file).await?;
             .arg("--gameDir")
             .arg(&self.config.minecraft_dir)
             .arg("--assetsDir")
-            .arg(&self.config.assets_dir)
-            .arg("--accessToken")
+            .arg(&self.config.assets_dir);
+
+        let version_file = version_dir.join(format!("{}.json", version));
+        let version_data = fs::read_to_string(&version_file).await?;
+        let version_json: VersionJson = serde_json::from_str(&version_data)?;
+
+        if let Some(asset_index) = version_json.asset_index {
+            command
+                .arg("--assetIndex")
+                .arg(asset_index.id);
+        }
+            command.arg("--accessToken")
             .arg("0")
             .arg("--userProperties")
             .arg("{}")
@@ -435,7 +502,7 @@ async fn main() -> Result<()> {
 ██╔══██╗██║     ██╔══██╗██╔══██║██╔══╝     ██║
 ██║  ██║╚██████╗██║  ██║██║  ██║██║        ██║
  ═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝        ╚═╝
-              v0.2 - by @vdkvdev
+              v0.3 - by @vdkvdev
 "#);
 
     let args = Args::parse();
