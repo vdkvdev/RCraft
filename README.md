@@ -16,29 +16,29 @@
 ## Usage
 
 > [!warning]
-> <b>RCraft is currently in beta v0.3, so you may encounter bugs. be gentle with it.</b>
+> RCraft is currently in beta v0.4, so you may encounter bugs. be gentle with it.
 
 Run the launcher with positional arguments:
 ```bash
-./RCraft <username> <minecraft_version>
+./RCraft <username> <minecraft_version> <ram_mb>
 ```
 
 **Recommendation:** Before executing the binary, it's recommended to run `sudo chmod 777 RCraft` to ensure proper permissions.
 
 Example:
 ```bash
-./RCraft vdkvdev 1.13
+./RCraft vdkvdev 1.21.8 8192
 ```
 
-## Notes
-
-- The launcher detects Java automatically. Ensure Java is installed and in your PATH.
-- Downloads are stored in a local `.minecraft` directory structure for persistence.
-- Tested on Unix-like systems (Linux, macOS). Windows may require adjustments for terminal commands.
+> [!Note]
+> Currently, RCraft v0.4 (beta) supports Linux only
+> For now, supports versions 1.8 and above only.
+> Downloads are stored in a local `.minecraft` directory structure for persistence.
+> The launcher detects Java automatically. Ensure Java is installed and in your PATH.
 
 ## Upcoming Features
 
-- Support for Minecraft versions below 1.13.
+- Support for Windows and macOS
 
 ## License
 

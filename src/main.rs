@@ -4,14 +4,17 @@ use serde::{Deserialize, Serialize};
 use std::env;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+
+use std::process::{Command, Stdio, exit};
 use tokio::fs;
+use colored::*;
 
 #[derive(Parser, Debug)]
 #[command(author, about, long_about = None, disable_help_flag = true, disable_version_flag = true)]
 struct Args {
     username: String,
     minecraft_version: String,
+    ram_mb: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -154,7 +157,7 @@ impl MinecraftLauncher {
     }
 
     async fn download_version(&self, version: &MinecraftVersion) -> Result<()> {
-        println!("Downloading version...");
+        println!("{}", "Downloading version...".green());
 
         let version_dir = self.config.versions_dir.join(&version.id);
         fs::create_dir_all(&version_dir).await?;
@@ -178,7 +181,7 @@ impl MinecraftLauncher {
         }
         #[derive(Deserialize)]
         struct VersionJson {
-            downloads: VersionJsonDownloads,
+            downloads: Option<VersionJsonDownloads>,
             libraries: Vec<Library>,
             #[serde(rename = "assetIndex")]
             asset_index: Option<AssetIndex>,
@@ -199,25 +202,31 @@ impl MinecraftLauncher {
         #[derive(Deserialize)]
         struct AssetObject {
             hash: String,
-            size: u64,
         }
         let version_json: VersionJson = serde_json::from_str(&version_data)?;
-        if let Some(client) = version_json.downloads.client {
-            let jar_url = client.url;
-            let jar_path = version_dir.join(format!("{}.jar", version.id));
+        let jar_url = if let Some(downloads) = &version_json.downloads {
+            downloads.client.as_ref().map(|c| c.url.clone())
+        } else {
+            None
+        }.unwrap_or_else(|| format!("https://s3.amazonaws.com/Minecraft.Download/versions/{}/{}.jar", &version.id, &version.id));
 
-            let resp = reqwest::get(&jar_url).await?;
-            let bytes = resp.bytes().await?.to_vec();
-            let mut out = tokio::fs::File::create(&jar_path).await?;
-            use tokio::io::AsyncWriteExt;
-            out.write_all(&bytes).await?;
-        }
+        let jar_path = version_dir.join(format!("{}.jar", version.id));
+
+        let resp = reqwest::get(&jar_url).await?;
+        let bytes = resp.bytes().await?.to_vec();
+        let mut out = tokio::fs::File::create(&jar_path).await?;
+        use tokio::io::AsyncWriteExt;
+        out.write_all(&bytes).await?;
         // --- Download libraries and natives ---
         // progress.set_message("Downloading libraries and natives...");
         let os_name = "linux";
-        // Clean natives folder before extracting
-        if natives_dir.exists() {
-            std::fs::remove_dir_all(&natives_dir)?;
+        // Check if natives already exist to skip extraction
+        let has_natives = std::fs::read_dir(&natives_dir).is_ok_and(|rd| rd.count() > 0);
+        if !has_natives {
+            // Clean natives folder before extracting
+            if natives_dir.exists() {
+                std::fs::remove_dir_all(&natives_dir)?;
+            }
             std::fs::create_dir_all(&natives_dir)?;
         }
         for lib in &version_json.libraries {
@@ -254,6 +263,11 @@ impl MinecraftLauncher {
                                     let mut out = tokio::fs::File::create(&native_zip_path).await?;
                                     use tokio::io::AsyncWriteExt;
                                     out.write_all(&bytes).await?;
+                                    out.flush().await?;
+                                    out.sync_all().await?;
+                                }
+                                if has_natives {
+                                    continue;
                                 }
                                 // Extract natives respecting extract.exclude
                                 let mut exclude: Vec<String> = Vec::new();
@@ -271,22 +285,19 @@ impl MinecraftLauncher {
                                         if excluded || name.ends_with("/") {
                                             continue;
                                         }
-                                        // Extract only native files (.so, .dll, .dylib)
-                                        if name.ends_with(".so") || name.ends_with(".dll") || name.ends_with(".dylib") {
-                                            let outpath = natives_dir.join(&name);
-                                            if let Some(parent) = outpath.parent() {
-                                                std::fs::create_dir_all(parent)?;
-                                            }
-                                            let mut outfile = std::fs::File::create(&outpath)?;
-                                            std::io::copy(&mut file, &mut outfile)?;
-                                            println!("Extracted native: {}", name);
+                                        let filename = std::path::Path::new(&name).file_name().and_then(|f| f.to_str()).unwrap_or(&name).to_string();
+                                        let outpath = natives_dir.join(&filename);
+                                        if let Some(parent) = outpath.parent() {
+                                            std::fs::create_dir_all(parent)?;
                                         }
+                                        let mut outfile = std::fs::File::create(&outpath)?;
+                                        std::io::copy(&mut file, &mut outfile)?;
                                     }
                                     Ok::<(), anyhow::Error>(())
                                 })();
 
-                                if extraction_result.is_err() {
-                                    // Suppress warnings for failed native extraction
+                                if let Err(e) = extraction_result {
+                                    eprintln!("Warning: Failed to extract natives for {}: {}, continuing...", lib.name, e);
                                 }
                             }
                         }
@@ -333,6 +344,10 @@ impl MinecraftLauncher {
                 }
             }
         }
+        // Post-extraction check
+        //if std::fs::read_dir(&natives_dir).is_ok_and(|rd| rd.count() == 0) {
+        //    eprintln!("Warning: No natives extracted to {}, may cause launch issues", natives_dir.display());
+        //}
         Ok(())
     }
 
@@ -382,7 +397,18 @@ let version_data = tokio::fs::read_to_string(&version_file).await?;
         struct AssetIndex {
             id: String,
         }
-        println!("Launching Minecraft...");
+        println!("{}", "Launching Minecraft...".blue());
+
+        // Check version support
+        let version_parts: Vec<&str> = version.split('.').collect();
+        if version_parts.len() >= 2 && version_parts[0] == "1" {
+            if let Ok(minor) = version_parts[1].parse::<u32>() {
+                if minor < 8 {
+                    println!("{}", "Versions below 1.8 are not supported. Please use 1.8 or higher.".red());
+                    return Ok(());
+                }
+            }
+        }
 
         let java_path = self.find_java()?;
         let version_dir = self.config.versions_dir.join(version);
@@ -390,7 +416,7 @@ let version_data = tokio::fs::read_to_string(&version_file).await?;
         let natives_dir = version_dir.join("natives");
 
         if !jar_path.exists() {
-            println!("Error: Version not downloaded");
+            println!("{}", "Error: Version not downloaded".red());
             return Ok(());
         }
         // Build full classpath
@@ -434,16 +460,15 @@ let version_data = tokio::fs::read_to_string(&version_file).await?;
         let status = child.wait()?;
 
         if !status.success() {
+            let mut err = String::new();
             if let Some(mut stderr) = child.stderr.take() {
-                let mut err = String::new();
-                stderr.read_to_string(&mut err)?;
-                if err.contains("UnsatisfiedLinkError") || err.contains("lwjgl") {
-                    println!("Version not supported currently, try a version equal or superior to 1.13");
-                } else {
-                    println!("Error running Minecraft");
-                    println!("{}", err);
-                }
+                let _ = stderr.read_to_string(&mut err);
             }
+            println!("{}", "Error running Minecraft".red());
+            if !err.is_empty() {
+                println!("{} {}", "Error details:".red(), err);
+            }
+            return Ok(());
         }
 
         Ok(())
@@ -495,15 +520,16 @@ fn get_total_ram_mb() -> Result<u32> {
 }
 #[tokio::main]
 async fn main() -> Result<()> {
-    println!("{}", r#"
+    let banner = r#"
 ██████╗  ██████╗██████╗  █████╗ ███████╗████████╗
 ██╔══██╗██╔════╝██╔══██╗██╔══██╗██╔════╝╚══██╔══╝
 ██████╔╝██║     ██████╔╝███████║█████╗     ██║
 ██╔══██╗██║     ██╔══██╗██╔══██║██╔══╝     ██║
 ██║  ██║╚██████╗██║  ██║██║  ██║██║        ██║
- ═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝        ╚═╝
-              v0.3 - by @vdkvdev
-"#);
+╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝        ╚═╝
+              v0.4 - by @vdkvdev
+"#.yellow();
+    println!("{banner}");
 
     let args = Args::parse();
     let launcher = MinecraftLauncher::new()?;
@@ -519,7 +545,13 @@ async fn main() -> Result<()> {
     let version = args.minecraft_version;
 
     // Get RAM
-    let ram_mb = get_total_ram_mb()?;
+    let available_mb = get_total_ram_mb()? as u64;
+    let requested_mb = args.ram_mb;
+    if requested_mb < 1024 {
+        eprintln!("{}", "Error: Minimum RAM required is 1024MB".red());
+        exit(1);
+    }
+    let ram_mb = std::cmp::min(requested_mb, available_mb) as u32;
 
 
 
@@ -535,11 +567,10 @@ async fn main() -> Result<()> {
     let need_download = !jar_path.exists() || !jopt_simple_path.exists() || !natives_exist;
 
     if need_download {
-        println!("\nDownloading version files...");
         if let Some(target_version) = versions.iter().find(|v| v.id == version) {
             launcher.download_version(target_version).await?;
         } else {
-            println!("Error: Version not found");
+            println!("{}", "Error: Version not found - Please use 1.8 or higher".red());
             return Ok(());
         }
     }
