@@ -1,23 +1,31 @@
+//  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //
+// RCraft - Copyright (C) 2025 @vdkvdev                                             //
+//                                                                                  //
+// This program is free software under GPL-3.0: key freedoms and restrictions:      //
+// - Free use, study, and modification for any purpose.                             //
+// - Redistribution only under GPL-3.0 (copyleft: derivatives must be GPL-3).       //
+// - Preserve all copyright attributions (including this one).                      //
+// - Do not add proprietary clauses or remove notices.                              //
+//                                                                                  //
+// For the full text, see LICENSE in this repository.                               //
+// Repository: https://github.com/vdkvdev/RCraft                                    //
+//  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //  //
+
 use anyhow::Result;
-use clap::Parser;
+
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::io::Read;
+use std::cmp::Ordering;
 use std::path::{Path, PathBuf};
+use std::collections::HashMap;
 
-use std::process::{Command, Stdio, exit};
+use std::process::{Command, Stdio};
 use tokio::fs;
 use colored::*;
+use dialoguer::{Select, Input, Confirm};
 
-#[derive(Parser, Debug)]
-#[command(author, about, long_about = None, disable_help_flag = true, disable_version_flag = true)]
-struct Args {
-    username: String,
-    minecraft_version: String,
-    ram_mb: u64,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct MinecraftVersion {
     id: String,
     #[serde(rename = "type")]
@@ -25,7 +33,14 @@ struct MinecraftVersion {
     url: String,
     time: String,
     #[serde(rename = "releaseTime")]
-    release_time: String,
+    release_time: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct Profile {
+    username: String,
+    version: String,
+    ram_mb: u32,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -132,6 +147,43 @@ impl LauncherConfig {
 
 struct MinecraftLauncher {
     config: LauncherConfig,
+}
+
+async fn load_profiles(config: &LauncherConfig) -> Result<HashMap<String, Profile>> {
+    let path = config.minecraft_dir.join("profiles.json");
+    if path.exists() {
+        let content = fs::read_to_string(&path).await?;
+        Ok(serde_json::from_str(&content)?)
+    } else {
+        Ok(HashMap::new())
+    }
+}
+
+async fn save_profiles(config: &LauncherConfig, profiles: &HashMap<String, Profile>) -> Result<()> {
+    let path = config.minecraft_dir.join("profiles.json");
+    let content = serde_json::to_string_pretty(profiles)?;
+    fs::write(&path, content).await?;
+    Ok(())
+}
+
+fn parse_version(s: &str) -> (i32, i32, i32) {
+    let parts: Vec<&str> = s.split('.').collect();
+    (
+        parts.get(0).unwrap_or(&"0").parse().unwrap_or(0),
+        parts.get(1).map_or(0, |x| x.parse().unwrap_or(0)),
+        parts.get(2).map_or(0, |x| x.parse().unwrap_or(0)),
+    )
+}
+
+fn compare_versions(a: &str, b: &str) -> Ordering {
+    let pa = parse_version(a);
+    let pb = parse_version(b);
+    (pa.0, pa.1, pa.2).cmp(&(pb.0, pb.1, pb.2))
+}
+
+fn is_at_least_1_8(v: &str) -> bool {
+    let p = parse_version(v);
+    p.0 > 1 || (p.0 == 1 && p.1 >= 8)
 }
 
 impl MinecraftLauncher {
@@ -521,62 +573,123 @@ fn get_total_ram_mb() -> Result<u32> {
 #[tokio::main]
 async fn main() -> Result<()> {
     let banner = r#"
-██████╗  ██████╗██████╗  █████╗ ███████╗████████╗
-██╔══██╗██╔════╝██╔══██╗██╔══██╗██╔════╝╚══██╔══╝
-██████╔╝██║     ██████╔╝███████║█████╗     ██║
-██╔══██╗██║     ██╔══██╗██╔══██║██╔══╝     ██║
-██║  ██║╚██████╗██║  ██║██║  ██║██║        ██║
-╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝        ╚═╝
-              v0.4 - by @vdkvdev
+ ██████╗  ██████╗██████╗  █████╗ ███████╗████████╗
+ ██╔══██╗██╔════╝██╔══██╗██╔══██╗██╔════╝╚══██╔══╝
+ ██████╔╝██║     ██████╔╝███████║█████╗     ██║
+ ██╔══██╗██║     ██╔══██╗██╔══██║██╔══╝     ██║
+ ██║  ██║╚██████╗██║  ██║██║  ██║██║        ██║
+ ╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝        ╚═╝
+              v0.5 - by @vdkvdev
 "#.yellow();
     println!("{banner}");
 
-    let args = Args::parse();
     let launcher = MinecraftLauncher::new()?;
 
     // Ensure directories exist
     launcher.config.ensure_directories().await?;
 
-    // Get username
-    let username = args.username;
-
-    // Get version
+    let mut profiles = load_profiles(&launcher.config).await?;
     let versions = launcher.get_available_versions().await?;
-    let version = args.minecraft_version;
+    let filtered_versions: Vec<_> = versions.iter().filter(|v| is_at_least_1_8(&v.id)).cloned().collect();
+    let mut sorted_versions = filtered_versions.clone();
+    sorted_versions.sort_by(|a, b| compare_versions(&a.id, &b.id));
 
-    // Get RAM
-    let available_mb = get_total_ram_mb()? as u64;
-    let requested_mb = args.ram_mb;
-    if requested_mb < 1024 {
-        eprintln!("{}", "Error: Minimum RAM required is 1024MB".red());
-        exit(1);
-    }
-    let ram_mb = std::cmp::min(requested_mb, available_mb) as u32;
+    loop {
+        let create_item = format!("{}", "[+] Create Profile".blue());
+        let exit_item = format!("{}", "Exit".red());
+        let mut display_items = vec![create_item];
+        let profile_keys: Vec<String> = profiles.keys().cloned().collect();
+        let profile_displays: Vec<String> = profile_keys.iter().map(|name| {
+            let p = profiles.get(name).unwrap();
+            format!("{} (v{}, {}MB)", format!("{}", name.green()), p.version, p.ram_mb)
+        }).collect();
+        display_items.extend(profile_displays);
+        display_items.push(exit_item);
+        let selection = Select::new()
+            .with_prompt("Choose an option:")
+            .items(&display_items)
+            .interact()?;
 
-
-
-
-    // Check if version is downloaded
-    let version_dir = launcher.config.versions_dir.join(&version);
-    let jar_path = version_dir.join(format!("{}.jar", version));
-    let natives_dir = version_dir.join("natives");
-
-    // Check for missing important libraries or natives
-    let jopt_simple_path = launcher.config.libraries_dir.join("net/sf/jopt-simple/jopt-simple/4.6/jopt-simple-4.6.jar");
-    let natives_exist = natives_dir.exists() && natives_dir.read_dir().map(|mut d| d.next().is_some()).unwrap_or(false);
-    let need_download = !jar_path.exists() || !jopt_simple_path.exists() || !natives_exist;
-
-    if need_download {
-        if let Some(target_version) = versions.iter().find(|v| v.id == version) {
-            launcher.download_version(target_version).await?;
+        if selection == 0 {
+            // Create
+            let username: String = Input::new().with_prompt("Username (min 3, max 16 chars)").interact()?;
+            if username.is_empty() || username.len() < 3 || username.len() > 16 || profiles.contains_key(&username) {
+                println!("{}", "Invalid: min 3, max 16 chars or already exists!".red());
+                continue;
+            }
+            let min_version = sorted_versions[0].id.clone();
+            let max_version = sorted_versions.last().unwrap().id.clone();
+            let version;
+            loop {
+                let candidate: String = Input::new().with_prompt(format!("Minecraft version (min {}, max {})", min_version, max_version)).interact()?;
+                if is_at_least_1_8(&candidate) && sorted_versions.iter().any(|v| v.id == candidate) {
+                    version = candidate;
+                    break;
+                }
+                println!("{}", format!("Invalid version. Use between {} and {}", min_version, max_version).red());
+            }
+            let available_mb = get_total_ram_mb()? as u64;
+            let ram_str: String = Input::new().with_prompt(format!("RAM in MB (min 1024, max {})", available_mb)).interact()?;
+            if let Ok(ram) = ram_str.parse::<u32>() {
+                if ram >= 1024 && (ram as u64) <= available_mb {
+                    profiles.insert(username.clone(), Profile { username: username.clone(), version, ram_mb: ram });
+                    save_profiles(&launcher.config, &profiles).await?;
+                    println!("{}", "Profile created!".green());
+                } else {
+                    println!("{}", "Invalid RAM".red());
+                }
+            } else {
+                println!("{}", "Invalid RAM".red());
+            }
+        } else if selection == display_items.len() - 1 {
+            break;
         } else {
-            println!("{}", "Error: Version not found - Please use 1.8 or higher".red());
-            return Ok(());
+            let profile_idx = selection - 1;
+            let profile_name = profile_keys[profile_idx].clone();
+            let action_items = vec![format!("{}", "Launch".green()), format!("{}", "Delete".red())];
+            let action_sel = Select::new()
+                .with_prompt(format!("What do you want to do with {}?", profile_name.green()))
+                .items(&action_items)
+                .interact()?;
+            if action_sel == 0 {
+                // Launch
+                let profile = profiles.get(&profile_name).unwrap().clone();
+                println!("{}", format!("Launching {}...", profile_name.green()));
+                let target_version = sorted_versions.iter().find(|v| v.id == profile.version).unwrap();
+                let available_mb = get_total_ram_mb()? as u64;
+                let ram_mb = std::cmp::min(profile.ram_mb as u64, available_mb) as u32;
+                // Check download
+                let version_dir = launcher.config.versions_dir.join(&profile.version);
+                let jar_path = version_dir.join(format!("{}.jar", profile.version));
+                let natives_dir = version_dir.join("natives");
+                let jopt_simple_path = launcher.config.libraries_dir.join("net/sf/jopt-simple/jopt-simple/4.6/jopt-simple-4.6.jar");
+                let natives_exist = if !natives_dir.exists() {
+                    false
+                } else {
+                    match tokio::fs::read_dir(&natives_dir).await {
+                        Ok(mut d) => match d.next_entry().await {
+                            Ok(Some(_)) => true,
+                            _ => false,
+                        },
+                        Err(_) => false,
+                    }
+                };
+                let need_download = !jar_path.exists() || !jopt_simple_path.exists() || !natives_exist;
+                if need_download {
+                    launcher.download_version(target_version).await?;
+                }
+                launcher.launch_minecraft(&profile.version, &profile.username, ram_mb).await?;
+                break;
+            } else {
+                // Delete
+                if Confirm::new().with_prompt(format!("Delete {}?", profile_name.red())).interact()? {
+                    profiles.remove(&profile_name);
+                    save_profiles(&launcher.config, &profiles).await?;
+                    println!("{}", "Deleted!".green());
+                }
+            }
         }
     }
-
-    // Launch Minecraft
-    launcher.launch_minecraft(&version, &username, ram_mb).await?;
 
     Ok(())
 }
