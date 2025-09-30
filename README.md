@@ -2,12 +2,7 @@
 
 RCraft is a lightweight, command-line Minecraft launcher written in Rust. It supports downloading and launching Minecraft versions, with interactive profile management for easy setup and gameplay. No GUI, just a fast, terminal-based experience intuitive menus.
 
-<div align="center">
-  <img src="media/screenshot.png" alt="Demo RCraft"/>
-</div>
-
-> [!Note]
-> Currently, RCraft v0.5 (beta) supports Linux only
+<img src="media/screenshot.png" alt="Demo RCraft"/>
 
 **Requirements**:
 - Rust (latest stable version recommended).
@@ -25,11 +20,7 @@ Run the binary:
 ./RCraft
 ```
 ## Demo
-<p align="center">
-  <video autoplay loop muted playsinline>
-    <source src="media/video.mp4" type="video/mp4">
-  </video>
-</p>
+<img src="media/demo.gif" alt="Demo"/>
 
 ## Installation (for dev)
 1. **Clone the Repository**:
