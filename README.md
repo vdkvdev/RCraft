@@ -1,6 +1,6 @@
-🦀 RCraft - Minecraft CLI Launcher
+# RCraft - Minecraft CLI Launcher
 
-RCraft is a lightweight, command-line Minecraft launcher written in Rust. It supports downloading and launching Minecraft versions, with interactive profile management for easy setup and gameplay. No GUI, just a fast, terminal-based experience intuitive menus.
+🦀 An ultra-lightweight Minecraft launcher in CLI, written in Rust, which automatically downloads the necessary files and runs the game.
 
 <img src="media/screenshot.png" alt="Demo RCraft"/>
 
@@ -34,16 +34,6 @@ Run the binary:
    cargo build --release
    ```
    - The binary will be at `./target/release/RCraft`.
-
-## Features
-- **Interactive CLI**: No command-line arguments needed. Run and interact via menus to create profiles, launch games, or manage setups.
-- **Profile Management**: Create profiles with username, version, and RAM allocation. Profiles are saved in `~/.minecraft/profiles.json` for persistence.
-- **Version Support**: Downloads official Minecraft versions.
-- **Async Downloads**: Uses Reqwest and Tokio for efficient, non-blocking downloads of JARs, libraries, assets, and natives.
-- **Java Auto-Detection**: Finds and uses the system Java installation (supports multiple versions).
-- **RAM Management**: Allocates specified RAM, capped to system available memory to prevent crashes.
-- **Lightweight**: Minimal dependencies. Built for speed and low resource usage.
-- **Extraction & Classpath**: Handles ZIP natives extraction and builds the full classpath for launch.
 
 ## License
 
