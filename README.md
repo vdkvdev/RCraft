@@ -5,35 +5,33 @@
 <img src="media/screenshot.png" alt="Demo RCraft"/>
 
 **Requirements**:
-- Rust (latest stable version recommended).
 - Internet connection for downloading Minecraft files.
 - Java Runtime Environment (JRE) installed on the system (automatically detected).
+
+## Installation
+
+Download the `auto_installer_rcraft.sh` script from the [releases](https://github.com/vdkvdev/RCraft/releases/tag/v0.5) page.
+
+Give it execution permissions:
+
+```bash
+chmod +x auto_installer_rcraft.sh
+```
+
+Run the installer:
+
+```bash
+./auto_installer_rcraft.sh
+```
+
+This will automatically install RCraft.
 
 ## Usage
 > [!warning]
 > RCraft is currently in beta v0.5, so you may encounter bugs.
 
-**Recommendation:** Before executing the binary, it's recommended to run `sudo chmod 777 RCraft` to ensure proper permissions.
-
-Run the binary:
-```bash
-./RCraft
-```
 ## Demo
 <img src="media/demo.gif" alt="Demo"/>
-
-## Installation (for dev)
-1. **Clone the Repository**:
-   ```
-   git clone https://github.com/vdkvdev/RCraft.git
-   cd RCraft
-   ```
-
-2. **Build with Cargo**:
-   ```
-   cargo build --release
-   ```
-   - The binary will be at `./target/release/RCraft`.
 
 ## License
 
