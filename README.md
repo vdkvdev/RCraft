@@ -25,7 +25,7 @@ Run the installer:
 
 This will automatically install RCraft.
 
-<video src="https://github.com/vdkvdev/RCraft/tree/main/media/demo.mp4" autoplay muted loop></video>
+<img src="media/demo.gif" alt="Demo RCraft"/>
 
 Then you just have to double click on the RCraft icon created on the desktop or menu.
 
