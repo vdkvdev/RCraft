@@ -9,7 +9,6 @@
 - Java Runtime Environment (JRE) installed on the system (automatically detected).
 
 ## Installation
-
 Download the `auto_installer_rcraft.sh` script from the [releases](https://github.com/vdkvdev/RCraft/releases/tag/v0.5) page.
 
 Give it execution permissions:
@@ -26,14 +25,14 @@ Run the installer:
 
 This will automatically install RCraft.
 
+<video src="media/demo.mp4" autoplay muted loop></video>
+
+Then you just have to double click on the RCraft icon created on the desktop or menu.
+
 ## Usage
 > [!warning]
 > RCraft is currently in beta v0.5, so you may encounter bugs.
 
-## Demo
-<img src="media/demo.gif" alt="Demo"/>
-
 ## License
-
 This project is licensed under the GNU General Public License v3.0 (GPL-3.0).
 For more details, see the [LICENSE](LICENSE) file in the repository.
