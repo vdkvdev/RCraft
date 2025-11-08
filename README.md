@@ -9,25 +9,19 @@
 - Java Runtime Environment (JRE) installed on the system (automatically detected).
 
 ## Installation
-Download the `auto_installer_rcraft.sh` script from the [releases](https://github.com/vdkvdev/RCraft/releases/tag/v0.5) page.
+Download `RCraft` from the [releases](https://github.com/vdkvdev/RCraft/releases/tag/v0.5) page.
 
 Give it execution permissions:
 
 ```bash
-chmod +x auto_installer_rcraft.sh
+chmod +x RCraft
 ```
 
-Run the installer:
+Run:
 
 ```bash
-./auto_installer_rcraft.sh
+./RCraft
 ```
-
-This will automatically install RCraft.
-
-<img src="media/demo.gif" alt="Demo RCraft"/>
-
-Then you just have to double click on the RCraft icon created on the desktop or menu.
 
 > [!warning]
 > RCraft is currently in beta v0.5.
