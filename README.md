@@ -46,13 +46,13 @@ chmod +x rcraft-v0.6-x86_64.AppImage
 ./rcraft-v0.6-x86_64.AppImage
 ```
 
-#### Debian/Ubuntu (.deb)
+#### Debian (.deb)
 ```bash
 sudo dpkg -i rcraft-v0.6-amd64.deb
 # Or double-click the .deb file in your file manager
 ```
 
-#### Fedora/RHEL (.rpm)
+#### Fedora (.rpm)
 ```bash
 sudo rpm -i rcraft-v0.6.x86_64.rpm
 # Or use: sudo dnf install rcraft-v0.6.x86_64.rpm
@@ -68,12 +68,6 @@ chmod +x rcraft-v0.6-x86_64
 
 ## Technical Details
 
-**Built with**:
-- **Rust** - High-performance systems programming language
-- **Iced** - Cross-platform GUI framework
-- **Tokio** - Asynchronous runtime
-- **Serde** - Serialization framework
-
 **Data Storage**:
 - Profiles: `~/.minecraft/profiles.json`
 - Language: `~/.minecraft/language.json`
@@ -82,7 +76,7 @@ chmod +x rcraft-v0.6-x86_64
 ## Development Status
 
 > [!WARNING]
-> RCraft is currently in **beta v0.5**. While functional, you may encounter bugs or missing features.
+> RCraft is currently in **beta**. While functional, you may encounter bugs or missing features.
 
 ## License
 
