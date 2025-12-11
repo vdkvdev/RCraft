@@ -2,7 +2,9 @@
 
 🦀 A modern, lightweight Minecraft launcher built with Rust and powered by the Iced GUI framework.
 
-<img src="media/logo.png" alt="logo RCraft" width="50%"/>
+<p align="center">
+  <img src="media/logo.png" alt="logo RCraft" width="40%"/>
+</p>
 
 RCraft provides a sleek, user-friendly interface for managing Minecraft profiles, versions, and game launches with automatic file downloads and Java detection.
 
@@ -14,8 +16,6 @@ RCraft provides a sleek, user-friendly interface for managing Minecraft profiles
 🎮 **Version Selection** - Choose from all Minecraft versions
 💾 **RAM Allocation** - Customize memory allocation per profile  
 ☕ **Java Auto-Detection** - Automatically finds your Java installation  
-
-<img src="media/ss1.png" alt="RCraft"/>
 
 <img src="media/ss2.png" alt="RCraft"/>
 
@@ -32,11 +32,11 @@ RCraft provides a sleek, user-friendly interface for managing Minecraft profiles
 RCraft is available in multiple formats for Linux systems. Choose the one that works best for your distribution:
 
 - **AppImage** (`rcraft-v0.6-x86_64.AppImage`) - Universal Linux package, works on most distributions
-- **Debian/Ubuntu** (`rcraft-v0.6-amd64.deb`) - For Debian-based systems
-- **Fedora/RHEL** (`rcraft-v0.6.x86_64.rpm`) - For RPM-based systems
+- **Debian** (`rcraft-v0.6-amd64.deb`) - For Debian-based systems
+- **Fedora** (`rcraft-v0.6.x86_64.rpm`) - For RPM-based systems
 - **Standalone Binary** (`rcraft-v0.6-x86_64`) - Universal executable
 
-Download your preferred format from the [releases](https://github.com/vdkvdev/RCraft/releases) page or from the `dist` folder.
+Download your preferred format from the [releases](https://github.com/vdkvdev/RCraft/releases) page.
 
 ### Setup
 
@@ -63,6 +63,8 @@ sudo rpm -i rcraft-v0.6.x86_64.rpm
 chmod +x rcraft-v0.6-x86_64
 ./rcraft-v0.6-x86_64
 ```
+
+<img src="media/ss1.png" alt="RCraft"/>
 
 ## Technical Details
 
