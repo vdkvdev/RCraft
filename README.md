@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="media/r.png" alt="RCraft Logo" width="200"/>
+<img src="media/r.png" alt="RCraft Logo" width="140"/>
 
 # RCraft
 
@@ -18,8 +18,6 @@
 **RCraft** is a high-performance, open-source Minecraft launcher built with **Rust** and the **GTK4** framework (via Relm4). Designed for Linux, it offers a seamless, beautiful, and native experience for managing your Minecraft adventures.
 
 With a focus on speed, aesthetics, and usability, RCraft integrates perfectly with modern Linux desktop environments thanks to **Libadwaita**.
-
-## 🖼️ Screenshot
 
 <div align="center">
   <img src="media/ss1.png" alt="RCraft" width="800"/>
@@ -53,7 +51,6 @@ RCraft is distributed as an **AppImage**, a universal package that runs on almos
    ```
    *Or simply double-click the file.*
 
-## 📄 Screenshot
 <div align="center">
   <img src="media/ss2.png" alt="RCraft" width="800"/>
 </div>
