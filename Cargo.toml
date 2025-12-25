@@ -1,21 +1,26 @@
 [package]
 name = "RCraft"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2024"
 description = "Minecraft Launcher for Linux"
 license = "GPL-3.0"
 authors = ["vdkvdev"]
+default-run = "RCraft"
 
 [dependencies]
-tokio = { version = "1.0", features = ["rt-multi-thread", "fs", "macros"] }
+tokio = { version = "1.0", features = ["rt-multi-thread", "fs", "macros", "process"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 reqwest = { version = "0.11", features = ["json"] }
 anyhow = "1.0"
 zip = "0.6"
 
-iced = { version = "0.13", features = ["tokio"] }
-iced_aw = "0.11"
+gtk4 = { version = "0.9", package = "gtk4" }
+relm4 = { version = "0.9", features = ["macros"] }
+relm4-macros = "0.9"
+glib = "0.20"
+adw = { version = "0.7", package = "libadwaita", features = ["v1_2", "v1_4"] }
+
 
 [profile.release]
 opt-level = "s"
@@ -23,25 +28,3 @@ lto = true
 codegen-units = 1
 panic = "abort"
 strip = true
-
-[package.metadata.deb]
-maintainer = "vdkvdev"
-copyright = "2025, vdkvdev"
-license-file = ["LICENSE", "4"]
-extended-description = """\
-RCraft is a Minecraft launcher for Linux with a modern GUI built using Rust and iced."""
-depends = "$auto"
-section = "games"
-priority = "optional"
-assets = [
-    ["target/release/RCraft", "usr/bin/", "755"],
-    ["RCraft.desktop", "usr/share/applications/", "644"],
-    ["rcraft.png", "usr/share/pixmaps/", "644"],
-]
-
-[package.metadata.generate-rpm]
-assets = [
-    { source = "target/release/RCraft", dest = "/usr/bin/RCraft", mode = "755" },
-    { source = "RCraft.desktop", dest = "/usr/share/applications/RCraft.desktop", mode = "644" },
-    { source = "rcraft.png", dest = "/usr/share/pixmaps/rcraft.png", mode = "644" },
-]

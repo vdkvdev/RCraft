@@ -1,85 +1,69 @@
-# RCraft - Minecraft Launcher
+<div align="center">
 
-🦀 A modern, lightweight Minecraft launcher built with Rust and powered by the Iced GUI framework.
+<img src="media/r.png" alt="RCraft Logo" width="200"/>
 
-<p align="center">
-  <img src="media/logo.png" alt="logo RCraft" width="40%"/>
-</p>
+# RCraft
 
-RCraft provides a sleek, user-friendly interface for managing Minecraft profiles, versions, and game launches with automatic file downloads and Java detection.
+**A Modern, Lightweight Minecraft Launcher for Linux**
 
-## Features
+[![Rust](https://img.shields.io/badge/Made_with-Rust-orange?style=flat-square&logo=rust)](https://www.rust-lang.org/)
+[![GTK4](https://img.shields.io/badge/GUI-GTK4-blue?style=flat-square&logo=gtk)](https://www.gtk.org/)
+[![License](https://img.shields.io/badge/License-GPL_v3-green?style=flat-square)](LICENSE)
+[![Version](https://img.shields.io/badge/Version-0.7.0-purple?style=flat-square)]()
 
-✨ **Modern GUI Interface** - Clean and intuitive Dracula-themed interface  
-📦 **Automatic Downloads** - Automatically downloads required Minecraft files  
-⚡ **Profile Management** - Create and manage multiple game profiles  
-🎮 **Version Selection** - Choose from all Minecraft versions
-💾 **RAM Allocation** - Customize memory allocation per profile  
-☕ **Java Auto-Detection** - Automatically finds your Java installation  
+</div>
 
-<img src="media/ss2.png" alt="RCraft"/>
+---
 
-## Requirements
+**RCraft** is a high-performance, open-source Minecraft launcher built with **Rust** and the **GTK4** framework (via Relm4). Designed for Linux, it offers a seamless, beautiful, and native experience for managing your Minecraft adventures.
 
-- **Operating System**: Linux
-- **Internet Connection**: Required for downloading Minecraft files
-- **Java Runtime Environment (JRE)**: Java 8 or higher (automatically detected)
+With a focus on speed, aesthetics, and usability, RCraft integrates perfectly with modern Linux desktop environments thanks to **Libadwaita**.
 
-## Installation
+## 🖼️ Screenshot
 
-### Download
+<div align="center">
+  <img src="media/ss1.png" alt="RCraft" width="800"/>
+</div>
 
-RCraft is available in multiple formats for Linux systems. Choose the one that works best for your distribution:
+## ✨ Features
 
-- **AppImage** (`rcraft-v0.6-x86_64.AppImage`) - Universal Linux package, works on most distributions
-- **Debian** (`rcraft-v0.6-amd64.deb`) - For Debian-based systems
-- **Fedora** (`rcraft-v0.6.x86_64.rpm`) - For RPM-based systems
-- **Standalone Binary** (`rcraft-v0.6-x86_64`) - Universal executable
+- **🚀 Modern Native UI**: Built with GTK4 and Libadwaita for a sleek, responsive, and native Linux feel.
+- **📦 Smart Version Management**: Easily download and launch any Minecraft version.
+- **🔧 Profile System**: Create and manage multiple isolated game profiles with custom settings.
+- **⚡ Performance First**: Lightweight footprint and fast startup times powered by Rust.
+- **🧶 Modding Ready**: Support for modded environments (Fabric) and custom game directories.
+- **☕ Auto-Java Detection**: Automatically finds and selects the appropriate Java Runtime Environment for your game version.
+- **💾 Resource Management**: Customize RAM allocation per profile to ensure smooth gameplay.
 
-Download your preferred format from the [releases](https://github.com/vdkvdev/RCraft/releases) page.
+## 🚀 Usage
 
-### Setup
+RCraft is distributed as an **AppImage**, a universal package that runs on almost any Linux distribution without needing installation.
 
-#### AppImage
-```bash
-chmod +x rcraft-v0.6-x86_64.AppImage
-./rcraft-v0.6-x86_64.AppImage
-```
+### Quick Start
 
-#### Debian (.deb)
-```bash
-sudo dpkg -i rcraft-v0.6-amd64.deb
-# Or double-click the .deb file in your file manager
-```
+1. **Download** the latest `RCraft-x86_64.AppImage` from the [Releases](https://github.com/vdkvdev/RCraft/releases) page.
+2. **Make it executable**:
+   Open your terminal and run:
+   ```bash
+   chmod +x RCraft-x86_64.AppImage
+   ```
+3. **Run**:
+   ```bash
+   ./RCraft-x86_64.AppImage
+   ```
+   *Or simply double-click the file.*
 
-#### Fedora (.rpm)
-```bash
-sudo rpm -i rcraft-v0.6.x86_64.rpm
-# Or use: sudo dnf install rcraft-v0.6.x86_64.rpm
-```
+## 📄 Screenshot
+<div align="center">
+  <img src="media/ss2.png" alt="RCraft" width="800"/>
+</div>
 
-#### Standalone Binary
-```bash
-chmod +x rcraft-v0.6-x86_64
-./rcraft-v0.6-x86_64
-```
+## 📄 License
 
-<img src="media/ss1.png" alt="RCraft"/>
+Distributed under the **GPL-3.0 License**. See [LICENSE](LICENSE) for more information.
 
-## Technical Details
+---
 
-**Data Storage**:
-- Profiles: `~/.minecraft/profiles.json`
-- Language: `~/.minecraft/language.json`
-- Game Files: `~/.minecraft/`
-
-## Development Status
-
-> [!WARNING]
-> RCraft is currently in **beta**. While functional, you may encounter bugs or missing features.
-
-## License
-
-This project is licensed under the **GNU General Public License v3.0 (GPL-3.0)**.
-
-For more details, see the [LICENSE](LICENSE) file in the repository.
+<div align="center">
+  Created in 🇨🇱 by <a href="https://github.com/vdkvdev">vdkvdev</a>
+</div>
