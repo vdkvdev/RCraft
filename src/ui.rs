@@ -117,6 +117,7 @@ pub enum AppMsg {
     Error(String),
     RequestDeleteProfile(String),
     SettingsLoaded(Settings),
+    SessionEnded(String, u64),
 }
 
 // ============================================================================
@@ -158,6 +159,9 @@ pub struct AppWidgets {
     create_sidebar_button: gtk::Button,
     settings_button: gtk::Button,
     logs_button: gtk::Button,
+    
+    // Settings widgets
+    theme_combo: adw::ComboRow,
 
     // Status/error labels
     status_label: gtk::Label,
@@ -284,7 +288,7 @@ impl SimpleComponent for AppModel {
 
         let ram_scale = adw::SpinRow::builder()
             .title("RAM (MB)")
-            .adjustment(&gtk::Adjustment::new(2048.0, 1024.0, 8192.0, 256.0, 256.0, 0.0))
+            .adjustment(&gtk::Adjustment::new(2048.0, 1024.0, 32768.0, 256.0, 256.0, 0.0))
             .build();
 
         let fabric_switch = adw::SwitchRow::builder()
@@ -303,7 +307,7 @@ impl SimpleComponent for AppModel {
         // Create pages for each section
         let home_page = create_home_page(&sender, &profile_list);
         let create_page = create_create_instance_page(&sender, &username_entry, &version_combo, &ram_scale, &fabric_switch);
-        let settings_page = create_settings_page(&sender, &nerd_mode_switch);
+        let (settings_page, theme_combo) = create_settings_page(&sender, &nerd_mode_switch);
         let (logs_page, logs_view) = create_logs_page(&sender, &model.logs);
 
         // Update settings page to use actual nerd mode switch from widgets or binding?
@@ -395,6 +399,7 @@ impl SimpleComponent for AppModel {
             create_sidebar_button,
             settings_button,
             logs_button,
+            theme_combo,
             status_label: gtk::Label::new(None),
             error_label,
             loading_spinner: loading_widgets.1,
@@ -545,6 +550,8 @@ impl SimpleComponent for AppModel {
                         // We use Launching state for "Launching..." screen which we want to keep.
                         self.state = AppState::Launching { version: profile_clone.version.clone() };
 
+                        let profile_name_clone = profile_name.clone();
+
                         std::thread::spawn(move || {
                             let rt = tokio::runtime::Runtime::new().unwrap();
                             rt.block_on(async {
@@ -629,6 +636,8 @@ impl SimpleComponent for AppModel {
                                                 // Game Started!
                                                 sender_clone.input(AppMsg::GameStarted);
 
+                                                let start_time = std::time::Instant::now();
+
                                                 // Streaming logs
                                                 let stdout = child.stdout.take();
                                                 let stderr = child.stderr.take();
@@ -656,6 +665,9 @@ impl SimpleComponent for AppModel {
 
                                                 // Wait for process to exit
                                                 let _ = child.wait().await;
+                                                let duration = start_time.elapsed().as_secs();
+
+                                                sender_clone.input(AppMsg::SessionEnded(profile_name_clone, duration));
                                                 sender_clone.input(AppMsg::LaunchCompleted);
                                             }
                                             Err(e) => {
@@ -843,7 +855,7 @@ impl SimpleComponent for AppModel {
                 if let Some(window) = &self.window {
                     let about = adw::AboutWindow::builder()
                         .application_name("RCraft")
-                        .version("v0.7")
+                        .version("v0.8")
                         .developer_name("vdkvdev")
                         .license_type(gtk::License::Gpl30)
                         .website("https://github.com/vdkvdev/rcraft")
@@ -916,6 +928,29 @@ impl SimpleComponent for AppModel {
                     });
 
                     dialog.present();
+                }
+            }
+            AppMsg::SessionEnded(profile_name, duration) => {
+                if let Some(profile) = self.profiles.get_mut(&profile_name) {
+                    profile.playtime_seconds += duration;
+                    profile.last_launch = Some(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs());
+
+                    // Save profiles
+                     if let Some(launcher) = &self.launcher {
+                        let config_dir = launcher.config.minecraft_dir.clone();
+                        let profiles_clone = self.profiles.clone();
+                        let sender_clone = sender.clone();
+                        std::thread::spawn(move || {
+                            let rt = tokio::runtime::Runtime::new().unwrap();
+                            rt.block_on(async {
+                                let path = config_dir.join("profiles.json");
+                                let json = serde_json::to_string_pretty(&profiles_clone).unwrap_or_default();
+                                if let Err(e) = tokio::fs::write(&path, json).await {
+                                    sender_clone.input(AppMsg::Error(format!("Failed to save profiles: {}", e)));
+                                }
+                            });
+                        });
+                    }
                 }
             }
             _ => {
@@ -1010,7 +1045,7 @@ impl SimpleComponent for AppModel {
             AppState::GameRunning { .. } => {
                 widgets.content_stack.set_visible_child_name("loading");
                 widgets.loading_page.set_title("Game Running");
-                widgets.loading_page.set_description(Some("Minecraft is running. Check Logs for details."));
+                widgets.loading_page.set_description(Some("Minecraft is running."));
                 widgets.loading_spinner.start();
 
                 // Disable sidebar buttons
@@ -1028,6 +1063,15 @@ impl SimpleComponent for AppModel {
         // Update common widgets
         widgets.logs_button.set_visible(self.settings.nerd_mode);
         widgets.nerd_mode_switch.set_active(self.settings.nerd_mode);
+
+        let theme_index = match self.settings.theme {
+            Theme::System => 0,
+            Theme::Light => 1,
+            Theme::Dark => 2,
+        };
+        if widgets.theme_combo.selected() != theme_index {
+            widgets.theme_combo.set_selected(theme_index);
+        }
     }
 }
 
@@ -1121,6 +1165,14 @@ fn create_sidebar(sender: &ComponentSender<AppModel>) -> (NavigationPage, gtk::B
     let spacer = gtk::Box::new(gtk::Orientation::Vertical, 0);
     spacer.set_vexpand(true);
     sidebar_content.append(&spacer);
+
+    // Version Label
+    let version_label = gtk::Label::builder()
+        .label("v0.8 (beta)")
+        .css_classes(vec!["dim-label".to_string(), "subtitle".to_string()])
+        .margin_bottom(12)
+        .build();
+    sidebar_content.append(&version_label);
 
     // Create navigation page
     let sidebar_page = adw::NavigationPage::builder()
@@ -1217,7 +1269,7 @@ fn create_create_instance_page(
 
     // Title label
     let title_label = gtk::Label::builder()
-        .label("Create Profile")
+        .label("New Profile")
         .halign(gtk::Align::Start)
         .css_classes(vec!["title-1".to_string()])
         .build();
@@ -1313,7 +1365,7 @@ fn create_create_instance_page(
     main_box
 }
 
-fn create_settings_page(sender: &ComponentSender<AppModel>, nerd_mode_switch: &adw::SwitchRow) -> gtk::Box {
+fn create_settings_page(sender: &ComponentSender<AppModel>, nerd_mode_switch: &adw::SwitchRow) -> (gtk::Box, adw::ComboRow) {
     let main_box = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .hexpand(true)
@@ -1333,14 +1385,14 @@ fn create_settings_page(sender: &ComponentSender<AppModel>, nerd_mode_switch: &a
 
     // Title label
     let title_label = gtk::Label::builder()
-        .label("General")
+        .label("Settings")
         .halign(gtk::Align::Start)
         .css_classes(vec!["title-1".to_string()])
         .build();
 
     content_container.append(&title_label);
 
-    // Create a list box for settings rows to match home style exactly
+    // Create a list box for settings rows
     let settings_list = gtk::ListBox::new();
     settings_list.add_css_class("boxed-list");
     settings_list.set_selection_mode(gtk::SelectionMode::None);
@@ -1398,44 +1450,68 @@ fn create_settings_page(sender: &ComponentSender<AppModel>, nerd_mode_switch: &a
 
     folder_row.add_suffix(&folder_button);
 
-    // About button
-    let about_row = adw::ActionRow::builder()
-        .title("About RCraft")
-        .hexpand(true)
-        .halign(gtk::Align::Fill)
-        .build();
-
-    let about_button = gtk::Button::builder()
-        .label("About")
-        .halign(gtk::Align::Center)
-        .valign(gtk::Align::Center)
-        .build();
-
-    let sender_clone = sender.clone();
-    about_button.connect_clicked(move |_| {
-        sender_clone.input(AppMsg::ShowAboutWindow);
-    });
-
-    about_row.add_suffix(&about_button);
-
-    // Use rows directly - they are ListBoxRows (ActionRow inherits PreferencesRow which inherits ListBoxRow)
-    // Just need to ensure no activation for hover effect
-
-
     folder_row.set_activatable(false);
-    about_row.set_activatable(false);
 
     // Add rows to list box
     settings_list.append(&theme_row);
     settings_list.append(&folder_row);
-    settings_list.append(&about_row);
     settings_list.append(nerd_mode_switch);
 
     // Add list box to main content
     content_container.append(&settings_list);
 
+    // About Section
+    // Title removed
+
+    let about_list = gtk::ListBox::new();
+    about_list.add_css_class("boxed-list");
+    about_list.set_selection_mode(gtk::SelectionMode::None);
+    about_list.set_hexpand(true);
+    about_list.set_halign(gtk::Align::Fill);
+
+    // Version Row
+    let version_row = adw::ActionRow::builder()
+        .title("Version")
+        .subtitle("v0.8")
+        .build();
+
+    // Developer Row
+    let dev_row = adw::ActionRow::builder()
+        .title("Developer")
+        .subtitle("vdkvdev")
+        .build();
+
+     // Source Code Row
+    let repo_row = adw::ActionRow::builder()
+        .title("Source Code")
+        .subtitle("https://github.com/vdkvdev/rcraft")
+        .build();
+    
+    // Make repo row clickable or have a button
+    // Let's add a button to open it
+    let repo_button = gtk::Button::builder()
+        .label("View")
+        .valign(gtk::Align::Center)
+        .build();
+    
+    // Add logic to open link
+    repo_button.connect_clicked(move |_| {
+         let _ = std::process::Command::new("xdg-open")
+             .arg("https://github.com/vdkvdev/rcraft")
+             .spawn();
+    });
+
+    repo_row.add_suffix(&repo_button);
+    repo_row.set_activatable(false); // only button is interactive
+
+    about_list.append(&version_row);
+    about_list.append(&dev_row);
+    about_list.append(&repo_row);
+
+    content_container.append(&about_list);
+
     main_box.append(&content_container);
-    main_box
+    (main_box, theme_row)
 }
 
 // ============================================================================
@@ -1535,7 +1611,7 @@ fn create_profile_row(name: &str, profile: &crate::models::Profile, sender: &rel
     });
 
     let delete_button = gtk::Button::builder()
-        .label("Delete")
+        .icon_name("user-trash-symbolic")
         .css_classes(vec!["destructive-action".to_string()])
         .valign(gtk::Align::Center)
         .build();
@@ -1553,6 +1629,7 @@ fn create_profile_row(name: &str, profile: &crate::models::Profile, sender: &rel
     box_container.append(&button_box);
 
     row.set_child(Some(&box_container));
+    row.set_activatable(false);
     row
 }
 
