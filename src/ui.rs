@@ -1624,6 +1624,10 @@ impl SimpleComponent for AppModel {
                         rt.block_on(async {
                             // Cache dir
                             let cache_dir = std::env::temp_dir().join("rcraft").join("cache").join("icons");
+                            if let Err(e) = std::fs::create_dir_all(&cache_dir) {
+                                println!("Failed to create icon cache dir: {}", e);
+                            }
+
                             // Check PNG first
                             let png_path = cache_dir.join(format!("{}.png", project_id_clone));
                             // Check SVG second
@@ -2416,7 +2420,7 @@ fn create_settings_page(sender: &ComponentSender<AppModel>, nerd_mode_switch: &a
     // Version Row
     let version_row = adw::ActionRow::builder()
         .title("Version")
-        .subtitle("v0.8")
+        .subtitle("v0.9")
         .build();
 
     // Developer Row

@@ -55,6 +55,18 @@ RCraft is distributed as an **AppImage**, a universal package that runs on almos
   <img src="media/ss2.png" alt="RCraft" width="800"/>
 </div>
 
+<div align="center">
+  <img src="media/ss3.png" alt="RCraft" width="800"/>
+</div>
+
+<div align="center">
+<img src="media/ss4.png" alt="RCraft" width="800"/>
+</div>
+
+<div align="center">
+<img src="media/ss5.png" alt="RCraft" width="800"/>
+</div>
+
 ## License
 
 Distributed under the **GPL-3.0 License**. See [LICENSE](LICENSE) for more information.
