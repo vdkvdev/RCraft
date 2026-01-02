@@ -1,5 +1,3 @@
-// settings.rs - Application settings management
-
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tokio::fs;
@@ -10,6 +8,8 @@ use crate::models::Theme;
 pub struct Settings {
     pub theme: Theme,
     pub nerd_mode: bool,
+    pub sidebar_collapsed: bool,
+    pub hide_mods_button: bool,
 }
 
 impl Default for Settings {
@@ -17,6 +17,8 @@ impl Default for Settings {
         Self {
             theme: Theme::System,
             nerd_mode: false,
+            sidebar_collapsed: false,
+            hide_mods_button: false,
         }
     }
 }
@@ -33,7 +35,6 @@ impl Settings {
 
     pub async fn save(&self, config_dir: &PathBuf) -> Result<(), std::io::Error> {
         let path = config_dir.join("settings.json");
-        // Ensure directory exists
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).await?;
         }

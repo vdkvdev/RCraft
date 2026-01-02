@@ -9,7 +9,7 @@
 [![Rust](https://img.shields.io/badge/Made_with-Rust-orange?style=flat-square&logo=rust)](https://www.rust-lang.org/)
 [![GTK4](https://img.shields.io/badge/GUI-GTK4-blue?style=flat-square&logo=gtk)](https://www.gtk.org/)
 [![License](https://img.shields.io/badge/License-GPL_v3-green?style=flat-square)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-0.8.0-purple?style=flat-square)]()
+[![Version](https://img.shields.io/badge/Version-0.9.0-purple?style=flat-square)]()
 
 </div>
 
@@ -23,17 +23,16 @@ With a focus on speed, aesthetics, and usability, RCraft integrates perfectly wi
   <img src="media/ss1.png" alt="RCraft" width="800"/>
 </div>
 
-## ✨ Features
+## Features
 
-- **🚀 Modern Native UI**: Built with GTK4 and Libadwaita for a sleek, responsive, and native Linux feel.
-- **📦 Smart Version Management**: Easily download and launch any Minecraft version.
-- **🔧 Profile System**: Create and manage multiple isolated game profiles with custom settings.
-- **⚡ Performance First**: Lightweight footprint and fast startup times powered by Rust.
-- **🧶 Modding Ready**: Support for modded environments (Fabric) and custom game directories.
-- **☕ Auto-Java Detection**: Automatically finds and selects the appropriate Java Runtime Environment for your game version.
-- **💾 Resource Management**: Customize RAM allocation per profile to ensure smooth gameplay.
+- **Modern Native UI**: Built with GTK4 and Libadwaita for a sleek, responsive, and native Linux feel.
+- **Smart Version Management**: Easily download and launch any Minecraft version.
+- **Profile System**: Create and manage multiple isolated game profiles with custom settings.
+- **Integrated Mod Browser**: Search, download, and install mods directly from Modrinth.
+- **Performance First**: Lightweight footprint and fast startup times powered by Rust.
+- **Auto-Java Detection**: Automatically finds and selects the appropriate Java Runtime Environment for your game version.
 
-## 🚀 Usage
+## Usage
 
 RCraft is distributed as an **AppImage**, a universal package that runs on almost any Linux distribution without needing installation.
 
@@ -51,16 +50,12 @@ RCraft is distributed as an **AppImage**, a universal package that runs on almos
    ```
    *Or simply double-click the file.*
 
+## Screenshot
 <div align="center">
   <img src="media/ss2.png" alt="RCraft" width="800"/>
 </div>
 
-## 🔮 To Do
-
-- [ ] Support for Windows
-- [ ] Manual Java Version Selection
-
-## 📄 License
+## License
 
 Distributed under the **GPL-3.0 License**. See [LICENSE](LICENSE) for more information.
 

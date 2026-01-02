@@ -1,5 +1,3 @@
-// config.rs - Configuration and file system operations
-
 use anyhow::Result;
 use std::env;
 use std::path::PathBuf;

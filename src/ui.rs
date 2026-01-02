@@ -1,29 +1,22 @@
-// ui.rs - Relm4 UI components for RCraft with libadwaita
-
 use adw::prelude::*;
 use adw::{self, NavigationSplitView, NavigationPage, StatusPage, EntryRow, ComboRow, SpinRow};
 use relm4::gtk;
-use relm4::{ComponentParts, ComponentSender, SimpleComponent};
-use std::collections::HashMap;
+use relm4::{ComponentParts, ComponentSender, SimpleComponent, RelmWidgetExt};
+use std::collections::{HashMap, VecDeque};
+
+use std::io::{Read}; // Added Read trait for zip
+use zip::ZipArchive;
+use std::fs::File;
 use tokio::runtime::Runtime;
-use tokio::io::{AsyncBufReadExt, BufReader};
-use gtk::prelude::*;
+use gtk::prelude::{AdjustmentExt, Cast, WidgetExt, ObjectExt};
 
 use crate::models::{MinecraftVersion, Profile};
 use crate::settings::Settings;
-
-
-
-
-use gtk::prelude::{AdjustmentExt, Cast, WidgetExt, ObjectExt};
-use crate::models::{Section, Theme};
+use crate::models::{Section, Theme, ModSearchResult};
 use crate::launcher::MinecraftLauncher;
-
-// ============================================================================
-// Application Model
-// ============================================================================
-
-
+use crate::modrinth_client::ModrinthClient;
+use tokio::io::{AsyncBufReadExt, BufReader};
+use crate::mods_ui::{create_mods_page, create_mod_search_result_row};
 
 // ============================================================================
 // Application Model
@@ -32,6 +25,7 @@ use crate::launcher::MinecraftLauncher;
 pub struct AppModel {
     pub state: AppState,
     pub launcher: Option<MinecraftLauncher>,
+    pub modrinth: ModrinthClient,
     pub window: Option<adw::ApplicationWindow>,
 
     // Data
@@ -53,12 +47,74 @@ pub struct AppModel {
     // UI State
     pub error_message: Option<String>,
     pub download_dots: u8,
+    pub sidebar_collapsed: bool,
 
     pub versions_updated: bool,
     pub version_list_model: Option<gtk::StringList>,
+    pub is_searching: bool,
+
+    // Mods UI State
+    pub mod_search_results: Vec<ModSearchResult>,
+    pub mod_search_entry: Option<gtk::SearchEntry>,
+    pub mod_search_spinner: Option<gtk::Spinner>,
+    pub mod_browse_list: Option<gtk::ListBox>,
+    pub mod_installed_list: Option<gtk::ListBox>,
+    pub selected_mod_profile: Option<String>,
+    pub mod_profile_list_model: Option<gtk::StringList>,
+
+    // Track installed mods: ProjectID -> Filename
+    pub installed_mods: HashMap<String, String>,
+
+    pub toast_overlay: Option<adw::ToastOverlay>,
+
+    // Icon Download Queue
+    pub icon_download_queue: VecDeque<(String, String)>, // (ProjectID, URL)
+    pub is_downloading_icon: bool,
 
     // Component sender for UI updates
     pub sender: ComponentSender<AppModel>,
+}
+
+impl AppModel {
+     // Helper to update button state based on installation status
+    fn update_mod_button_state(&self, project_id: &str) {
+         if let Some(list) = &self.mod_browse_list {
+             let is_installed = self.installed_mods.contains_key(project_id);
+             let icon_name = if is_installed { "user-trash-symbolic" } else { "folder-download-symbolic" };
+             let tooltip = if is_installed { "Uninstall" } else { "Install" };
+             let sensitive = true;
+
+             let mut sibling = list.first_child();
+             while let Some(child) = sibling {
+                   if let Some(row) = child.downcast_ref::<gtk::ListBoxRow>() {
+                        if let Some(box_widget) = row.child() {
+                             if let Some(bx) = box_widget.downcast_ref::<gtk::Box>() {
+                                  let mut box_child = bx.first_child();
+                                  while let Some(b_child) = box_child {
+                                       if let Some(button) = b_child.downcast_ref::<gtk::Button>() {
+                                            if button.widget_name() == format!("btn_{}", project_id) {
+                                                 button.set_icon_name(icon_name);
+                                                 button.set_tooltip_text(Some(tooltip));
+                                                 button.set_sensitive(sensitive);
+
+                                                 // Update CSS class?
+                                                 if is_installed {
+                                                     button.add_css_class("destructive-action");
+                                                 } else {
+                                                     button.remove_css_class("destructive-action");
+                                                 }
+                                                 break;
+                                            }
+                                       }
+                                       box_child = b_child.next_sibling();
+                                  }
+                             }
+                        }
+                   }
+                   sibling = child.next_sibling();
+             }
+         }
+    }
 }
 
 
@@ -107,10 +163,11 @@ pub enum AppMsg {
     BackToMainMenu,
     UpdateDownloadDots,
     OpenMinecraftFolder,
-    ShowToast(String),
     ShowAboutWindow,
     ThemeSelected(Theme),
     ToggleNerdMode(bool),
+    ToggleHideMods(bool),
+    ToggleSidebar,
     Log(String),
     MinimizeWindow,
     CloseWindow,
@@ -118,6 +175,22 @@ pub enum AppMsg {
     RequestDeleteProfile(String),
     SettingsLoaded(Settings),
     SessionEnded(String, u64),
+    ColorsLoaded(Vec<String>), // Placeholder example
+    RefreshInstalledMods,
+    SelectModProfile(String),
+    // Modrinth Messages
+    SearchMods(String),
+    ModsSearched(Result<Vec<ModSearchResult>, String>),
+    InstallMod(String), // Project ID
+    UninstallMod(String), // Filename
+    DownloadModIcon(String, String), // Project ID, URL
+    ModIconDownloaded(String, String), // project_id, path
+    ProcessIconQueue,
+    ModActionButtonClicked(String), // project_id (Toggle Install/Uninstall)
+    ModInstallFinished(String, bool), // project_id, success
+    ModUninstallFinished(String), // project_id
+    RegisterInstalledMod(String, String), // project_id, filename
+    ShowToast(String),
 }
 
 // ============================================================================
@@ -136,6 +209,7 @@ pub struct AppWidgets {
     home_page: gtk::Box,
     create_page: gtk::Box,
     settings_page: gtk::Box,
+    mods_page: gtk::Box,
     logs_page: gtk::ScrolledWindow,
     loading_page: adw::StatusPage,
 
@@ -146,6 +220,7 @@ pub struct AppWidgets {
     ram_scale: adw::SpinRow,
     fabric_switch: adw::SwitchRow,
     nerd_mode_switch: adw::SwitchRow,
+    hide_mods_switch: adw::SwitchRow,
 
     // Buttons
     launch_button: gtk::Button,
@@ -157,9 +232,31 @@ pub struct AppWidgets {
     // Sidebar buttons
     home_button: gtk::Button,
     create_sidebar_button: gtk::Button,
+    mods_button: gtk::Button,
     settings_button: gtk::Button,
     logs_button: gtk::Button,
-    
+
+    // Mods widgets
+    mod_profile_dropdown: gtk::DropDown,
+    mod_search_stack: gtk::Stack,
+
+    // Sidebar button labels (for visibility)
+    home_label: gtk::Label,
+    create_label: gtk::Label,
+    mods_label: gtk::Label,
+    settings_label: gtk::Label,
+    logs_label: gtk::Label,
+
+    // Sidebar button boxes (for alignment)
+    home_box: gtk::Box,
+    create_box: gtk::Box,
+    mods_box: gtk::Box,
+    settings_box: gtk::Box,
+    logs_box: gtk::Box,
+
+    // Sidebar Toggle
+    sidebar_toggle_button: gtk::Button,
+
     // Settings widgets
     theme_combo: adw::ComboRow,
 
@@ -170,6 +267,9 @@ pub struct AppWidgets {
     // Loading widgets
     loading_spinner: gtk::Spinner,
     loading_label: gtk::Label,
+
+    // Toast Overlay
+    toast_overlay: adw::ToastOverlay,
 
     // Logs view
     logs_view: gtk::TextView,
@@ -212,6 +312,7 @@ impl SimpleComponent for AppModel {
                     None
                 }
             },
+            modrinth: ModrinthClient::new(),
             window: Some(root.clone()),
             profiles: HashMap::new(),
             available_versions: Vec::new(),
@@ -223,6 +324,8 @@ impl SimpleComponent for AppModel {
             fabric_switch_enabled: false,
             error_message: None,
             download_dots: 0,
+            sidebar_collapsed: false,
+            is_searching: false,
 
             // Initialize settings
             settings: {
@@ -242,6 +345,31 @@ impl SimpleComponent for AppModel {
 
             versions_updated: false,
             version_list_model: None,
+
+            mod_search_results: Vec::new(),
+            mod_search_entry: None,
+            mod_search_spinner: None, // We don't need this stored in model anymore? Or we keep it?
+            // Wait, we need to toggle the stack, not the spinner directly.
+            // So we can remove this or keep it as None.
+            // But update_view needs to know IF we are searching.
+            // We'll add is_searching state.
+            mod_browse_list: None,
+            mod_installed_list: None,
+            selected_mod_profile: None,
+            mod_profile_list_model: None,
+
+            // Map ProjectID -> Filename
+            // This tracks mods installed IN THIS SESSION (or known).
+            // Persistence requires saving this mapping or scanning metadata.
+            installed_mods: HashMap::new(),
+
+            toast_overlay: None,
+
+
+
+            icon_download_queue: VecDeque::new(),
+            is_downloading_icon: false,
+
             sender: sender.clone(),
         };
 
@@ -256,14 +384,14 @@ impl SimpleComponent for AppModel {
 
         // Ensure sidebar expands to fill available space
         navigation_split_view.set_max_sidebar_width(250.0);
-        navigation_split_view.set_min_sidebar_width(180.0);
+        navigation_split_view.set_min_sidebar_width(60.0);
 
 
 
 
 
         // Create sidebar
-        let (sidebar, home_button, create_sidebar_button, settings_button, logs_button) = create_sidebar(&sender);
+        let (sidebar, home_button, create_sidebar_button, mods_button, settings_button, logs_button, home_label, create_label, mods_label, settings_label, logs_label, home_box, create_box, mods_box, settings_box, logs_box) = create_sidebar(&sender);
         navigation_split_view.set_sidebar(Some(&sidebar));
 
         // Create content stack for different sections
@@ -300,6 +428,11 @@ impl SimpleComponent for AppModel {
             .title("Nerd Mode")
             .build();
 
+        let hide_mods_switch = adw::SwitchRow::builder()
+            .title("Hide Mods Button")
+            .subtitle("Hide the Mods button in the sidebar")
+            .build();
+
         let profile_list = gtk::ListBox::new();
         let loading_widgets = create_loading_widgets();
 
@@ -307,31 +440,49 @@ impl SimpleComponent for AppModel {
         // Create pages for each section
         let home_page = create_home_page(&sender, &profile_list);
         let create_page = create_create_instance_page(&sender, &username_entry, &version_combo, &ram_scale, &fabric_switch);
-        let (settings_page, theme_combo) = create_settings_page(&sender, &nerd_mode_switch);
+        let (settings_page, theme_combo) = create_settings_page(&sender, &nerd_mode_switch, &hide_mods_switch);
         let (logs_page, logs_view) = create_logs_page(&sender, &model.logs);
+        let (mods_page, mod_search_entry, mod_search_button, mod_search_stack, mod_installed_list, mod_browse_list, mod_profile_dropdown) = create_mods_page(&sender);
 
-        // Update settings page to use actual nerd mode switch from widgets or binding?
-        // Actually create_settings_page created the switch inside itself.
-        // We should probably rely on messages to update the model.
-        // But we need ref to switch to update it if model changes?
-        // Let's assume create_settings_page handles it.
-        // Wait, I need to pass the switch to widgets to control its state?
-        // Or I can query the settings page children? Too complex.
-        // Let's modify create_settings_page to accept the switch or return it.
-        // For now let's assume create_settings_page creates it locally and I missed capturing it.
-        // Re-reading create_settings_page... it creates `nerd_mode_switch` locally.
-        // I need to be able to set its state from model.settings.nerd_mode.
-        // So I should pass it IN, or return it out.
-        // Let's pass it IN like other inputs.
+        // Store references to separate widgets for logic
+        model.mod_search_entry = Some(mod_search_entry.clone());
+        // model.mod_search_spinner = Some(mod_search_spinner.clone()); // Removed
+        model.mod_browse_list = Some(mod_browse_list.clone());
+        model.mod_installed_list = Some(mod_installed_list.clone());
+
+        // Connect Search Logic
+        // Connect Search Logic
+        let sender_clone = sender.clone();
+
+        mod_search_entry.connect_activate(move |entry| {
+             let text = entry.text().to_string();
+             if !text.is_empty() {
+                 sender_clone.input(AppMsg::SearchMods(text));
+             }
+        });
+
+        let sender_clone = sender.clone();
+        let search_entry_clone = mod_search_entry.clone();
+        mod_search_button.connect_clicked(move |_| {
+             let text = search_entry_clone.text().to_string();
+             if !text.is_empty() {
+                 sender_clone.input(AppMsg::SearchMods(text));
+             }
+        });
 
         content_stack.add_titled(&home_page, Some("home"), "Home");
         content_stack.add_titled(&create_page, Some("create"), "Create");
+        content_stack.add_titled(&mods_page, Some("mods"), "Mods");
         content_stack.add_titled(&settings_page, Some("settings"), "Settings");
         content_stack.add_titled(&logs_page, Some("logs"), "Logs");
         content_stack.add_titled(&loading_widgets.0, Some("loading"), "Loading");
 
         // Initialize Nerd Mode State
         logs_button.set_visible(model.settings.nerd_mode);
+
+        // Initialize Hide Mods State
+        // If hidden is true, visible is false
+        mods_button.set_visible(!model.settings.hide_mods_button);
 
         // ... (Error label creation)
 
@@ -357,10 +508,29 @@ impl SimpleComponent for AppModel {
         // Set the main content
         navigation_split_view.set_content(Some(&navigation_page));
 
+
+        // Toast Overlay
+        let toast_overlay = adw::ToastOverlay::new();
+        toast_overlay.set_child(Some(&navigation_split_view));
+        model.toast_overlay = Some(toast_overlay.clone());
+
         // Create header bar
         let header_bar = adw::HeaderBar::new();
         header_bar.set_show_end_title_buttons(true);
         header_bar.set_title_widget(Some(&adw::WindowTitle::new("RCraft", "")));
+
+        // Sidebar toggle button
+        let sidebar_toggle_button = gtk::Button::builder()
+            .icon_name("sidebar-show-symbolic")
+            .tooltip_text("Toggle Sidebar")
+            .build();
+
+        let sender_clone = sender.clone();
+        sidebar_toggle_button.connect_clicked(move |_| {
+            sender_clone.input(AppMsg::ToggleSidebar);
+        });
+
+        header_bar.pack_start(&sidebar_toggle_button);
 
         // Create vertical box to hold header bar and navigation split view
         let main_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -368,7 +538,7 @@ impl SimpleComponent for AppModel {
         main_box.set_hexpand(true);
         main_box.set_valign(gtk::Align::Fill);
         main_box.append(&header_bar);
-        main_box.append(&navigation_split_view);
+        main_box.append(&toast_overlay);
 
         root.set_content(Some(&main_box));
 
@@ -382,14 +552,21 @@ impl SimpleComponent for AppModel {
             home_page,
             create_page,
             settings_page,
+            mods_page,
             logs_page,
             loading_page: loading_widgets.0,
+
+            mod_profile_dropdown,
+            mod_search_stack,
+
             profile_list,
             username_entry,
             version_combo,
             ram_scale,
             fabric_switch,
+
             nerd_mode_switch,
+            hide_mods_switch,
             launch_button: gtk::Button::with_label("Launch"),
             create_button: gtk::Button::with_label("Create"),
             delete_button: gtk::Button::with_label("Delete"),
@@ -397,13 +574,26 @@ impl SimpleComponent for AppModel {
             cancel_button: gtk::Button::with_label("Cancel"),
             home_button,
             create_sidebar_button,
+            mods_button,
             settings_button,
             logs_button,
+            home_label,
+            create_label,
+            mods_label,
+            settings_label,
+            logs_label,
+            home_box,
+            create_box,
+            mods_box,
+            settings_box,
+            logs_box,
+            sidebar_toggle_button,
             theme_combo,
             status_label: gtk::Label::new(None),
             error_label,
             loading_spinner: loading_widgets.1,
             loading_label: loading_widgets.2,
+            toast_overlay,
             logs_view,
         };
 
@@ -477,13 +667,52 @@ impl SimpleComponent for AppModel {
             AppMsg::SettingsLoaded(settings) => {
                 self.settings = settings.clone();
                 // Apply loaded settings
+                self.sidebar_collapsed = settings.sidebar_collapsed;
                 self.sender.input(AppMsg::ToggleNerdMode(settings.nerd_mode));
+                self.sender.input(AppMsg::ToggleHideMods(settings.hide_mods_button));
                 self.sender.input(AppMsg::ThemeSelected(settings.theme));
+            }
+            AppMsg::ToggleHideMods(hide) => {
+                self.settings.hide_mods_button = hide;
+
+                // Update UI (sender not needed as update loop handles widgets update?
+                // Wait, relm4 simple component update loop updates logic, then view updates widgets?
+                // No, we need to update widgets here or in view.
+                // In simple component, we update model state, then `update_view` runs.
+                // So we just update model state. But we also need to save settings.
+
+                // Save settings
+                if let Some(launcher) = &self.launcher {
+                     let config_dir = launcher.config.minecraft_dir.clone();
+                     let settings_clone = self.settings.clone();
+                     std::thread::spawn(move || {
+                         let rt = tokio::runtime::Runtime::new().unwrap();
+                         rt.block_on(async {
+                             let _ = settings_clone.save(&config_dir).await;
+                         });
+                     });
+                }
             }
             AppMsg::ToggleNerdMode(enabled) => {
                 self.settings.nerd_mode = enabled;
 
                 // Save settings
+                if let Some(launcher) = &self.launcher {
+                     let config_dir = launcher.config.minecraft_dir.clone();
+                     let settings_clone = self.settings.clone();
+                     std::thread::spawn(move || {
+                         let rt = tokio::runtime::Runtime::new().unwrap();
+                         rt.block_on(async {
+                             let _ = settings_clone.save(&config_dir).await;
+                         });
+                     });
+                }
+            }
+            AppMsg::ToggleSidebar => {
+                self.sidebar_collapsed = !self.sidebar_collapsed;
+                self.settings.sidebar_collapsed = self.sidebar_collapsed;
+
+                 // Save settings
                 if let Some(launcher) = &self.launcher {
                      let config_dir = launcher.config.minecraft_dir.clone();
                      let settings_clone = self.settings.clone();
@@ -533,6 +762,39 @@ impl SimpleComponent for AppModel {
                 match result {
                     Ok(profiles) => {
                         self.profiles = profiles;
+
+                        // Populate Mod Profile Dropdown
+                        let mut display_strings = Vec::new();
+                        // Filter for Fabric profiles only and use "Username - Version" format
+                        let mut sorted_keys: Vec<&String> = self.profiles.keys().collect();
+                        sorted_keys.sort();
+
+                        for key in sorted_keys {
+                             if let Some(profile) = self.profiles.get(key) {
+                                 if profile.is_fabric {
+                                     display_strings.push(format!("{} - {}", profile.username, profile.version));
+                                 }
+                             }
+                        }
+
+                        let display_strs: Vec<&str> = display_strings.iter().map(|s| s.as_str()).collect();
+                        let model = gtk::StringList::new(&display_strs);
+                        self.mod_profile_list_model = Some(model);
+
+                        // Select first if available
+                        if let Some(first_str) = display_strings.first() {
+                             if self.selected_mod_profile.is_none() {
+                                 if let Some((name, version)) = first_str.rsplit_once(" - ") {
+                                     // Reconstruct key: username_version_fabric
+                                     let key = format!("{}_{}_fabric", name, version);
+                                     // Verify it exists (it should)
+                                     if self.profiles.contains_key(&key) {
+                                          self.selected_mod_profile = Some(key);
+                                          sender.input(AppMsg::RefreshInstalledMods);
+                                     }
+                                 }
+                             }
+                        }
                     }
                     Err(e) => {
                         self.error_message = Some(format!("Failed to load profiles: {}", e));
@@ -561,11 +823,12 @@ impl SimpleComponent for AppModel {
                                 // Fabric installation logic
                                 if profile_clone.is_fabric {
                                     // Check/Install Fabric logic...
+                                    // Check/Install Fabric logic...
                                      let fabric_installed = if let Ok(mut entries) = tokio::fs::read_dir(&launcher_clone.config.versions_dir).await {
                                         let mut found = None;
                                         while let Ok(Some(entry)) = entries.next_entry().await {
                                             if let Some(name) = entry.file_name().to_str() {
-                                                if name.contains("fabric-loader") && name.contains(&profile_clone.version) {
+                                                if name.contains("fabric-loader") && name.ends_with(&format!("-{}", profile_clone.version)) {
                                                     // Found one
                                                     found = Some(name.to_string());
                                                     break;
@@ -580,7 +843,7 @@ impl SimpleComponent for AppModel {
                                     if let Some(fabric_id) = fabric_installed {
                                         version_to_launch = fabric_id;
                                     } else {
-                                        sender_clone.input(AppMsg::ShowToast(format!("First time setup: Installing Fabric for {}...", profile_clone.version)));
+
                                         match launcher_clone.install_fabric(&profile_clone.version).await {
                                             Ok(new_fabric_id) => {
                                                 version_to_launch = new_fabric_id;
@@ -598,36 +861,66 @@ impl SimpleComponent for AppModel {
                                 let version_dir = launcher_clone.config.versions_dir.join(vanilla_version_id);
                                 let jar_path = version_dir.join(format!("{}.jar", vanilla_version_id));
 
+                                println!("[Debug] Checking Vanilla JAR at: {:?}", jar_path);
+
                                 if !jar_path.exists() {
-                                    sender_clone.input(AppMsg::ShowToast(format!("Downloading Minecraft {}...", vanilla_version_id)));
+                                    println!("[Debug] Vanilla JAR not found. Attempting download for version: {}", vanilla_version_id);
                                      match launcher_clone.get_available_versions().await {
                                         Ok(versions) => {
                                              if let Some(v) = versions.into_iter().find(|v| v.id == *vanilla_version_id) {
                                                   // Change state to downloading
                                                   sender_clone.input(AppMsg::DownloadStarted(vanilla_version_id.clone()));
+                                                  println!("[Debug] Found version in manifest. Starting download...");
 
                                                   if let Err(e) = launcher_clone.download_version(&v).await {
-                                                      sender_clone.input(AppMsg::Error(format!("Failed to download vanilla version: {}", e)));
+                                                      let err_msg = format!("Failed to download vanilla version: {}", e);
+                                                      println!("[Error] {}", err_msg);
+                                                      sender_clone.input(AppMsg::Error(err_msg));
                                                       return;
                                                   }
+                                                  println!("[Debug] Download completed successfully.");
                                              } else {
-                                                 sender_clone.input(AppMsg::Error(format!("Version {} not found in manifest", vanilla_version_id)));
+                                                 let err_msg = format!("Version {} not found in manifest", vanilla_version_id);
+                                                 println!("[Error] {}", err_msg);
+                                                 sender_clone.input(AppMsg::Error(err_msg));
                                                  return;
                                              }
                                         }
                                         Err(e) => {
-                                             sender_clone.input(AppMsg::Error(format!("Failed to fetch version manifest: {}", e)));
+                                             let err_msg = format!("Failed to fetch version manifest: {}", e);
+                                             println!("[Error] {}", err_msg);
+                                             sender_clone.input(AppMsg::Error(err_msg));
                                              return;
                                         }
+                                    }
+                                } else {
+                                    println!("[Debug] Vanilla JAR exists.");
+                                }
+
+                                // Determine Game Directory
+                                let game_dir = if let Some(dir) = &profile_clone.game_dir {
+                                    std::path::PathBuf::from(dir)
+                                } else {
+                                    // Default to isolated directory: instances/<profile_name>
+                                    launcher_clone.config.minecraft_dir.join("instances").join(&profile_name_clone)
+                                };
+
+                                // Ensure game directory exists
+                                if !game_dir.exists() {
+                                    if let Err(e) = std::fs::create_dir_all(&game_dir) {
+                                         sender_clone.input(AppMsg::Error(format!("Failed to create instance directory: {}", e)));
+                                         return;
                                     }
                                 }
 
                                 // Launch Minecraft
-                                sender_clone.input(AppMsg::ShowToast(format!("Launching {}...", version_to_launch)));
+                                // Launching... (Toast removed)
+                                println!("[Debug] Invoking launch_minecraft...");
                                 match launcher_clone.launch_minecraft(
                                     &version_to_launch,
                                     &profile_clone.username,
-                                    profile_clone.ram_mb
+                                    profile_clone.ram_mb,
+                                    &game_dir
                                 ).await {
                                     Ok(mut command) => {
                                         // Spawn the command to get a Child process
@@ -695,11 +988,11 @@ impl SimpleComponent for AppModel {
             AppMsg::LaunchCompleted => {
                  // Changed behavior: Only go back to home AFTER process exit
                 self.state = AppState::Ready { current_section: Section::Home };
-                sender.input(AppMsg::ShowToast("Minecraft session ended.".to_string()));
+
             }
             AppMsg::DownloadCompleted => {
                 self.state = AppState::Ready { current_section: Section::Home };
-                sender.input(AppMsg::ShowToast("Download completed!".to_string()));
+
             }
             AppMsg::UsernameChanged(username) => {
                 self.input_username = username;
@@ -746,6 +1039,7 @@ impl SimpleComponent for AppModel {
                     playtime_seconds: 0,
                     last_launch: None,
                     is_fabric,
+                    game_dir: None,
                 };
 
                 // Generate profile name (username_version_variant)
@@ -760,6 +1054,20 @@ impl SimpleComponent for AppModel {
 
                 // Add to profiles map
                 self.profiles.insert(profile_name.clone(), profile);
+
+                // Update Mod Profile Dropdown
+                let mut display_strings = Vec::new();
+                let mut sorted_keys: Vec<&String> = self.profiles.keys().collect();
+                sorted_keys.sort();
+
+                for key in sorted_keys {
+                     if let Some(profile) = self.profiles.get(key) {
+                         display_strings.push(format!("{} - {}", key, profile.version));
+                     }
+                }
+                let display_strs: Vec<&str> = display_strings.iter().map(|s| s.as_str()).collect();
+                let model = gtk::StringList::new(&display_strs);
+                self.mod_profile_list_model = Some(model);
 
                 // Save to profiles.json
                 if let Some(launcher) = &self.launcher {
@@ -790,12 +1098,26 @@ impl SimpleComponent for AppModel {
                 self.input_install_fabric = false;
                 self.fabric_switch_enabled = false;
 
-                sender.input(AppMsg::ShowToast("Profile saved successfully!".to_string()));
+
                 sender.input(AppMsg::NavigateToSection(Section::Home));
             }
             AppMsg::DeleteProfile(profile_name) => {
                 // Remove profile from map
                 self.profiles.remove(&profile_name);
+
+                // Update Mod Profile Dropdown
+                let mut display_strings = Vec::new();
+                let mut sorted_keys: Vec<&String> = self.profiles.keys().collect();
+                sorted_keys.sort();
+
+                for key in sorted_keys {
+                     if let Some(profile) = self.profiles.get(key) {
+                         display_strings.push(format!("{} - {}", key, profile.version));
+                     }
+                }
+                let display_strs: Vec<&str> = display_strings.iter().map(|s| s.as_str()).collect();
+                let model = gtk::StringList::new(&display_strs);
+                self.mod_profile_list_model = Some(model);
 
                 // Save to profiles.json
                 if let Some(launcher) = &self.launcher {
@@ -819,7 +1141,7 @@ impl SimpleComponent for AppModel {
                     });
                 }
 
-                sender.input(AppMsg::ShowToast("Profile deleted successfully!".to_string()));
+
                 sender.input(AppMsg::NavigateToSection(Section::Home));
             }
             AppMsg::CancelCreate => {
@@ -842,15 +1164,7 @@ impl SimpleComponent for AppModel {
                 println!("Error: {}", message);
                 self.state = AppState::Error { message };
             }
-            AppMsg::ShowToast(message) => {
-                if let Some(_window) = &self.window {
-                    let _toast = adw::Toast::builder()
-                        .title(&message)
-                        .timeout(3)
-                        .build();
-                    println!("Toast: {}", message);
-                }
-            }
+
             AppMsg::ShowAboutWindow => {
                 if let Some(window) = &self.window {
                     let about = adw::AboutWindow::builder()
@@ -888,7 +1202,7 @@ impl SimpleComponent for AppModel {
                      });
                 }
 
-                sender.input(AppMsg::ShowToast(format!("Theme changed to {}", theme)));
+
             }
             AppMsg::OpenMinecraftFolder => {
                 if let Some(launcher) = &self.launcher {
@@ -898,7 +1212,7 @@ impl SimpleComponent for AppModel {
                             .arg(&minecraft_dir)
                             .spawn();
                     });
-                    sender.input(AppMsg::ShowToast("Opening Minecraft folder...".to_string()));
+
                 }
             }
             AppMsg::RequestDeleteProfile(profile_name) => {
@@ -953,11 +1267,559 @@ impl SimpleComponent for AppModel {
                     }
                 }
             }
+            AppMsg::RefreshInstalledMods => {
+                 if let Some(list) = &self.mod_installed_list {
+                      while let Some(child) = list.first_child() {
+                          list.remove(&child);
+                      }
+
+                      // Determine mods directory
+                      let mods_dir = if let Some(profile_name) = &self.selected_mod_profile {
+                          if let Some(profile) = self.profiles.get(profile_name) {
+                              if let Some(dir) = &profile.game_dir {
+                                  std::path::PathBuf::from(dir).join("mods")
+                              } else if let Some(launcher) = &self.launcher {
+                                  launcher.config.minecraft_dir.join("instances").join(profile_name).join("mods")
+                              } else {
+                                  return;
+                              }
+                          } else {
+                              return;
+                          }
+                      } else {
+                          // Default global mods dir if no profile selected (or "default" fallback?)
+                          // Or empty if no profile selected.
+                          return;
+                      };
+
+                      if mods_dir.exists() {
+                           if let Ok(mut entries) = std::fs::read_dir(&mods_dir) {
+                                while let Some(Ok(entry)) = entries.next() {
+                                    if let Some(name) = entry.file_name().to_str() {
+                                        if name.ends_with(".jar") {
+                                            // Create row with delete button
+                                            let row = gtk::ListBoxRow::new();
+                                            let box_container = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+                                            box_container.set_margin_all(12);
+
+                                            // Mod Icon
+                                            let icon_image = gtk::Image::builder()
+                                                .icon_name("application-x-addon-symbolic") // Default fallback
+                                                .pixel_size(32)
+                                                .build();
+
+                                            // Try to extract icon from jar
+                                            let jar_path = mods_dir.join(name);
+                                            let cache_dir = std::env::temp_dir().join("rcraft").join("cache").join("installed_icons");
+                                            std::fs::create_dir_all(&cache_dir).unwrap_or_default();
+
+                                            // Unique cache key: mod_filename.png (simple but effective for now)
+                                            let icon_path = cache_dir.join(format!("{}.png", name));
+
+
+                                            if icon_path.exists() {
+                                                icon_image.set_from_file(Some(icon_path.to_str().unwrap_or_default()));
+                                            } else {
+                                                // Extract
+                                                let mut icon_path_inside_jar: Option<String> = None;
+
+                                                if let Ok(file) = File::open(&jar_path) {
+                                                    if let Ok(mut archive) = ZipArchive::new(file) {
+                                                        // 1. Read fabric.mod.json to find icon path
+                                                        if let Ok(mut json_file) = archive.by_name("fabric.mod.json") {
+                                                            let mut json_str = String::new();
+                                                            if json_file.read_to_string(&mut json_str).is_ok() {
+                                                                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&json_str) {
+                                                                    if let Some(icon_val) = json.get("icon") {
+                                                                        if let Some(s) = icon_val.as_str() {
+                                                                             icon_path_inside_jar = Some(s.to_string());
+                                                                        } else if let Some(obj) = icon_val.as_object() {
+                                                                             // Sometimes icon is a map { "16x16": "assets/..." }
+                                                                             // Pick largest or first?
+                                                                             if let Some(s) = obj.values().last().and_then(|v| v.as_str()) {
+                                                                                 icon_path_inside_jar = Some(s.to_string());
+                                                                             }
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+
+                                                        // 2. If found, extract icon file (borrow archive again)
+                                                        if let Some(mut ip) = icon_path_inside_jar {
+                                                            // Remove leading ./ if present
+                                                            if ip.starts_with("./") { ip = ip[2..].to_string(); }
+
+                                                            if let Ok(mut icon_zip_file) = archive.by_name(&ip) {
+                                                                let mut buffer = Vec::new();
+                                                                if icon_zip_file.read_to_end(&mut buffer).is_ok() {
+                                                                      // Convert/Save using image crate
+                                                                      match image::load_from_memory(&buffer) {
+                                                                          Ok(img) => {
+                                                                              if img.save_with_format(&icon_path, image::ImageFormat::Png).is_ok() {
+                                                                                  icon_image.set_from_file(Some(icon_path.to_str().unwrap_or_default()));
+                                                                              }
+                                                                          },
+                                                                          Err(_) => {
+                                                                              // Ignore
+                                                                          }
+                                                                      }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+
+                                            let label = gtk::Label::builder()
+                                                .label(name)
+                                                .halign(gtk::Align::Start)
+                                                .hexpand(true)
+                                                .build();
+
+                                            let delete_button = gtk::Button::builder()
+                                                .icon_name("user-trash-symbolic")
+                                                .css_classes(vec!["destructive-action"])
+                                                .tooltip_text("Uninstall")
+                                                .build();
+
+                                            let sender_clone = sender.clone();
+                                            let filename = name.to_string();
+                                            delete_button.connect_clicked(move |_| {
+                                                 sender_clone.input(AppMsg::UninstallMod(filename.clone()));
+                                             });
+
+                                            box_container.append(&icon_image);
+                                            box_container.append(&label);
+                                            box_container.append(&delete_button);
+                                            row.set_child(Some(&box_container));
+                                            list.append(&row);
+                                        }
+                                    }
+                                }
+                           }
+                      }
+                 }
+            }
+            AppMsg::SelectModProfile(profile_name) => {
+                self.selected_mod_profile = Some(profile_name);
+                // Refresh list for the new profile
+                sender.input(AppMsg::RefreshInstalledMods);
+            }
+            AppMsg::SearchMods(query) => {
+                self.is_searching = true;
+
+                let modrinth = self.modrinth.clone();
+                let sender_clone = sender.clone();
+                // Removed Toast: Searching...
+
+                // Get profile version for filtering
+                let (version_filter, loader_filter) = if let Some(profile_name) = &self.selected_mod_profile {
+                    if let Some(profile) = self.profiles.get(profile_name) {
+                        (Some(profile.version.clone()), Some("fabric".to_string()))
+                    } else {
+                        (None, None)
+                    }
+                } else {
+                    (None, None)
+                };
+
+                std::thread::spawn(move || {
+                    let rt = tokio::runtime::Runtime::new().unwrap();
+                    rt.block_on(async {
+                         let v_ref = version_filter.as_deref();
+                         let l_ref = loader_filter.as_deref();
+                         match modrinth.search_mods(&query, 20, v_ref, l_ref).await {
+                             Ok(results) => sender_clone.input(AppMsg::ModsSearched(Ok(results))),
+                             Err(e) => sender_clone.input(AppMsg::ModsSearched(Err(e.to_string()))),
+                         }
+                    });
+                });
+            }
+            AppMsg::ModsSearched(result) => {
+                self.is_searching = false;
+
+                match result {
+                    Ok(results) => {
+                        self.mod_search_results = results.clone();
+
+                        // Populate list directly since we have the reference
+                        if let Some(list) = &self.mod_browse_list {
+                             // Clear existing
+                             while let Some(child) = list.first_child() {
+                                 list.remove(&child);
+                             }
+
+                             // Add new items
+                             for mod_data in results {
+                                 let row = create_mod_search_result_row(&mod_data, &sender);
+                                 list.append(&row);
+
+                                 if let Some(url) = &mod_data.icon_url {
+                                      sender.input(AppMsg::DownloadModIcon(mod_data.project_id.clone(), url.clone()));
+                                 }
+                             }
+                        }
+                    }
+                    Err(e) => {
+                        println!("Search failed: {}", e);
+                        println!("Search error: {}", e);
+                    }
+                }
+            }
+            AppMsg::InstallMod(project_id) => {
+                let modrinth = self.modrinth.clone();
+                let sender_clone = sender.clone();
+                let _project_id_clone = project_id.clone();
+
+                // Determine mods directory
+                let mods_dir = if let Some(profile_name) = &self.selected_mod_profile {
+                    if let Some(profile) = self.profiles.get(profile_name) {
+                        if let Some(dir) = &profile.game_dir {
+                            std::path::PathBuf::from(dir).join("mods")
+                        } else if let Some(launcher) = &self.launcher {
+                            launcher.config.minecraft_dir.join("instances").join(profile_name).join("mods")
+                        } else {
+                            sender.input(AppMsg::Error("Could not determine mods directory.".to_string()));
+                            return;
+                        }
+                    } else {
+                         sender.input(AppMsg::Error("Profile not found.".to_string()));
+                         return;
+                    }
+                } else {
+                    sender.input(AppMsg::Error("No profile selected for installation.".to_string()));
+                    return;
+                };
+
+                // Create mods dir if needed
+                if !mods_dir.exists() {
+                     if let Err(e) = std::fs::create_dir_all(&mods_dir) {
+                         sender.input(AppMsg::Error(format!("Failed to create mods directory: {}", e)));
+                         return;
+                     }
+                }
+
+                // Set button to loading state
+                if let Some(list) = &self.mod_browse_list {
+                     // Find button with id "btn_<project_id>"
+                     // ... (omitted iteration for brevity, assuming helper or inline)
+                     let mut sibling = list.first_child();
+                     while let Some(child) = sibling {
+                           if let Some(row) = child.downcast_ref::<gtk::ListBoxRow>() {
+                                if let Some(box_widget) = row.child() {
+                                     if let Some(bx) = box_widget.downcast_ref::<gtk::Box>() {
+                                          let mut box_child = bx.first_child();
+                                          while let Some(b_child) = box_child {
+                                               if let Some(button) = b_child.downcast_ref::<gtk::Button>() {
+                                                    if button.widget_name() == format!("btn_{}", project_id) {
+                                                         button.set_icon_name("process-working-symbolic");
+                                                         button.set_sensitive(false);
+                                                         break;
+                                                    }
+                                               }
+                                               box_child = b_child.next_sibling();
+                                          }
+                                     }
+                                }
+                           }
+                           sibling = child.next_sibling();
+                     }
+                }
+
+                 // Get profile version for filtering
+                let (version_filter, loader_filter) = if let Some(profile_name) = &self.selected_mod_profile {
+                    if let Some(profile) = self.profiles.get(profile_name) {
+                        (Some(profile.version.clone()), Some("fabric".to_string()))
+                    } else {
+                        (None, None)
+                    }
+                } else {
+                    (None, None)
+                };
+
+                 std::thread::spawn(move || {
+                    let rt = tokio::runtime::Runtime::new().unwrap();
+                    rt.block_on(async {
+                         // 1. Get versions with filtering
+                         let v_ref = version_filter.as_deref();
+                         let l_ref = loader_filter.as_deref();
+                         match modrinth.get_versions(&project_id, l_ref, v_ref).await {
+                             Ok(versions) => {
+                                 if let Some(version) = versions.first() {
+                                     if let Some(file) = version.files.iter().find(|f| f.primary).or(version.files.first()) {
+                                          let path = mods_dir.join(&file.filename);
+                                          // Removed Toast: Downloading...
+                                          match modrinth.download_mod(&file.url, &path).await {
+                                              Ok(_) => {
+                                                  sender_clone.input(AppMsg::ShowToast("Mod installed!".to_string()));
+                                                  sender_clone.input(AppMsg::RefreshInstalledMods);
+
+                                                  // Register FIRST so map is updated before UI refresh
+                                                  sender_clone.input(AppMsg::RegisterInstalledMod(project_id.clone(), file.filename.clone()));
+                                                  sender_clone.input(AppMsg::ModInstallFinished(project_id.clone(), true));
+                                              },
+                                              Err(e) => {
+                                                  sender_clone.input(AppMsg::Error(format!("Download failed: {}", e)));
+                                                  sender_clone.input(AppMsg::ModInstallFinished(project_id.clone(), false));
+                                              }
+                                          }
+                                     } else {
+                                          sender_clone.input(AppMsg::Error("No files found for this version".to_string()));
+                                          sender_clone.input(AppMsg::ModInstallFinished(project_id.clone(), false));
+                                     }
+                                 } else {
+                                      sender_clone.input(AppMsg::Error("No versions found for this mod".to_string()));
+                                      sender_clone.input(AppMsg::ModInstallFinished(project_id.clone(), false));
+                                 }
+                             }
+                             Err(e) => {
+                                 sender_clone.input(AppMsg::Error(format!("Failed to get mod versions: {}", e)));
+                                 sender_clone.input(AppMsg::ModInstallFinished(project_id.clone(), false));
+                             }
+                         }
+                    });
+                });
+            }
+
+            AppMsg::DownloadModIcon(project_id, url) => {
+                self.icon_download_queue.push_back((project_id, url));
+                if !self.is_downloading_icon {
+                    sender.input(AppMsg::ProcessIconQueue);
+                }
+            }
+
+            AppMsg::ProcessIconQueue => {
+                if self.is_downloading_icon {
+                    return;
+                }
+
+                if let Some((project_id, url)) = self.icon_download_queue.pop_front() {
+                    self.is_downloading_icon = true;
+                    // let modrinth = self.modrinth.clone(); // Modrinth client has download helper, but we need bytes now.
+                    // ModrinthClient::download_icon saves to file directly. We need to fetch bytes first.
+                    // So we should probably use the reqwest client directly or add a helper to ModrinthClient.
+                    // For simplicity, let's just use reqwest here or modify ModrinthClient?
+                    // Accessing modrinth.client is not possible if it's private.
+                    // Let's modify ModrinthClient to have `fetch_bytes` or just create a new client/request here?
+                    // Creating a new client for every icon is bad.
+                    // Let's add `get_icon_bytes` to ModrinthClient?
+                    // Or since we are inside `ui.rs` and `ModrinthClient` is in `modrinth_client.rs`, we can't easily change it without editing that file.
+                    // Let's edit `modrinth_client.rs` to expose a method to get bytes.
+
+                    // Actually, let's just check `modrinth_client.rs`. It has `client` field. Is it pub?
+                    // No.
+
+                    // Okay, let's pause editing `ui.rs` and update `modrinth_client.rs` first to add `download_icon_bytes`.
+                    // But wait, I'm already in a tool call.
+                    // I'll assume I can add it next.
+                    // For now, let's write the code assuming `modrinth.download_icon_bytes(&url)` exists.
+
+                    let modrinth = self.modrinth.clone();
+                    let sender_clone = sender.clone();
+                    let project_id_clone = project_id.clone();
+
+                    std::thread::spawn(move || {
+                        let rt = tokio::runtime::Runtime::new().unwrap();
+                        rt.block_on(async {
+                            // Cache dir
+                            let cache_dir = std::env::temp_dir().join("rcraft").join("cache").join("icons");
+                            // Check PNG first
+                            let png_path = cache_dir.join(format!("{}.png", project_id_clone));
+                            // Check SVG second
+                            let svg_path = cache_dir.join(format!("{}.svg", project_id_clone));
+
+                            // Helper to validate and return path if valid
+                            let validate_cache = |path: &std::path::PathBuf| -> bool {
+                                if !path.exists() { return false; }
+                                if let Ok(metadata) = std::fs::metadata(path) {
+                                    if metadata.len() < 100 { // Arbitrary small size check
+                                        let _ = std::fs::remove_file(path);
+                                        return false;
+                                    }
+                                }
+                                true
+                            };
+
+                            if validate_cache(&png_path) {
+                                sender_clone.input(AppMsg::ModIconDownloaded(project_id_clone, png_path.to_string_lossy().to_string()));
+                            } else if validate_cache(&svg_path) {
+                                sender_clone.input(AppMsg::ModIconDownloaded(project_id_clone, svg_path.to_string_lossy().to_string()));
+                            } else {
+                                if !url.starts_with("http") {
+                                      sender_clone.input(AppMsg::ModIconDownloaded(project_id_clone, "".to_string()));
+                                     return;
+                                }
+
+                                match modrinth.download_icon_bytes(&url).await {
+                                    Ok(bytes) => {
+                                        // Try converting to PNG first using image crate
+                                        match image::load_from_memory(&bytes) {
+                                            Ok(img) => {
+                                                if let Err(e) = img.save_with_format(&png_path, image::ImageFormat::Png) {
+                                                    println!("Failed to save converted icon for '{}': {}", project_id_clone, e);
+                                                    sender_clone.input(AppMsg::ModIconDownloaded(project_id_clone, "".to_string()));
+                                                } else {
+                                                    sender_clone.input(AppMsg::ModIconDownloaded(project_id_clone, png_path.to_string_lossy().to_string()));
+                                                }
+                                            },
+                                            Err(_) => {
+                                                // Failed to load as image -> check if it's SVG
+                                                // Simple heuristic: check for <svg or <?xml ... <svg
+                                                let s = String::from_utf8_lossy(&bytes);
+                                                if s.contains("<svg") {
+                                                     // Save as SVG
+                                                     if std::fs::write(&svg_path, &bytes).is_ok() {
+                                                          sender_clone.input(AppMsg::ModIconDownloaded(project_id_clone, svg_path.to_string_lossy().to_string()));
+                                                     } else {
+                                                          sender_clone.input(AppMsg::ModIconDownloaded(project_id_clone, "".to_string()));
+                                                     }
+                                                } else {
+                                                     // Unknown format or corrupted
+                                                     sender_clone.input(AppMsg::ModIconDownloaded(project_id_clone, "".to_string()));
+                                                }
+                                            }
+                                        }
+                                    },
+                                    Err(_) => {
+                                        sender_clone.input(AppMsg::ModIconDownloaded(project_id_clone, "".to_string()));
+                                    }
+                                }
+                            }
+                        });
+                    });
+                }
+            }
+            AppMsg::ModIconDownloaded(project_id, path) => {
+                self.is_downloading_icon = false;
+                sender.input(AppMsg::ProcessIconQueue); // Process next
+
+                if path.is_empty() { return; }
+
+                if let Some(list) = &self.mod_browse_list {
+                      let mut sibling = list.first_child();
+                      while let Some(child) = sibling {
+                           // This is the ListBoxRow
+                           if let Some(row) = child.downcast_ref::<gtk::ListBoxRow>() {
+                                if let Some(box_widget) = row.child() {
+                                     // Box
+                                     if let Some(bx) = box_widget.downcast_ref::<gtk::Box>() {
+                                          let mut box_child = bx.first_child();
+                                          while let Some(b_child) = box_child {
+                                               if let Some(image) = b_child.downcast_ref::<gtk::Image>() {
+                                                    if image.widget_name() == project_id {
+                                                         image.set_from_file(Some(&path));
+                                                         break;
+                                                    }
+                                               }
+                                               box_child = b_child.next_sibling();
+                                          }
+                                     }
+                                }
+                           }
+                           sibling = child.next_sibling();
+                      }
+                 }
+            }
+
+            AppMsg::ModInstallFinished(project_id, success) => {
+                 if success {
+                     // We need the filename to store in installed_mods
+                     // But InstallMod logic handles the download separately.
+                     // The InstallMod logic we saw earlier finds the version and downloads it.
+                     // It DID NOT pass the filename back in ModInstallFinished.
+                     // I need to update InstallMod logic to find the filename and pass it to ModInstallFinished?
+                     // Or just store it?
+                     // In InstallMod handler (below), we can see it finds the file.
+                     // I should modify InstallMod handler to Insert into installed_mods map.
+                 }
+
+                 // Reset button state
+                 self.update_mod_button_state(&project_id);
+            }
+            AppMsg::ModUninstallFinished(project_id) => {
+                self.installed_mods.remove(&project_id);
+                self.update_mod_button_state(&project_id);
+            }
+            AppMsg::ModActionButtonClicked(project_id) => {
+                if let Some(filename) = self.installed_mods.get(&project_id) {
+                    sender.input(AppMsg::UninstallMod(filename.clone()));
+                    // We also need to know the project_id to update UI after uninstall
+                    // UninstallMod just takes filename.
+                    // We can track "uninstalling_project_id" in state?
+                    // Or change UninstallMod to take (filename, Option<project_id>).
+                    // Or just look up who owns the filename? (Slow).
+                    // Better: Change UninstallMod to take project_id if we have it?
+                    // But installed mods list doesn't know project id.
+
+                    // Let's carry project_id in UninstallMod?
+                    // Or better: ModUninstallFinished is called by UninstallMod handler.
+                    // But UninstallMod handler needs to know project_id to send ModUninstallFinished.
+                    // So UninstallMod needs to take `(String, Option<String>)` -> (filename, project_id).
+                } else {
+                    sender.input(AppMsg::InstallMod(project_id));
+                }
+            }
+            AppMsg::ShowToast(message) => {
+                if let Some(overlay) = &self.toast_overlay {
+                    overlay.add_toast(adw::Toast::new(&message));
+                }
+            }
+            AppMsg::RegisterInstalledMod(project_id, filename) => {
+                self.installed_mods.insert(project_id, filename);
+            }
+            AppMsg::UninstallMod(filename) => {
+                // Determine mods directory (duplicate logic, should be helper but ok for now)
+                let mods_dir = if let Some(profile_name) = &self.selected_mod_profile {
+                    if let Some(profile) = self.profiles.get(profile_name) {
+                        if let Some(dir) = &profile.game_dir {
+                            std::path::PathBuf::from(dir).join("mods")
+                        } else if let Some(launcher) = &self.launcher {
+                            launcher.config.minecraft_dir.join("instances").join(profile_name).join("mods")
+                        } else {
+                            sender.input(AppMsg::Error("Could not determine mods directory.".to_string()));
+                            return;
+                        }
+                    } else {
+                         sender.input(AppMsg::Error("Profile not found.".to_string()));
+                         return;
+                    }
+                } else {
+                    sender.input(AppMsg::Error("No profile selected.".to_string()));
+                    return;
+                };
+
+                let file_path = mods_dir.join(&filename);
+                if file_path.exists() {
+                     match std::fs::remove_file(&file_path) {
+                         Ok(_) => {
+                             // Removed Toast: Uninstalled...
+                             sender.input(AppMsg::RefreshInstalledMods);
+
+                             // Find if this was a tracked mod and update UI
+                             let mut project_id_to_remove = None;
+                             for (pid, fname) in &self.installed_mods {
+                                 if fname == &filename {
+                                     project_id_to_remove = Some(pid.clone());
+                                     break;
+                                 }
+                             }
+
+                             if let Some(pid) = project_id_to_remove {
+                                 sender.input(AppMsg::ModUninstallFinished(pid));
+                             }
+                         }
+                         Err(e) => sender.input(AppMsg::Error(format!("Failed to uninstall mod: {}", e))),
+                     }
+                }
+            }
             _ => {
                 // Handle other messages
             }
         }
     }
+
+
 
     fn update_view(&self, widgets: &mut Self::Widgets, _sender: ComponentSender<Self>) {
         // Update UI based on model state
@@ -973,11 +1835,13 @@ impl SimpleComponent for AppModel {
                 widgets.home_button.set_sensitive(true);
                 widgets.create_sidebar_button.set_sensitive(true);
                 widgets.settings_button.set_sensitive(true);
+                widgets.mods_button.set_sensitive(true);
                 widgets.logs_button.set_sensitive(true);
 
                 // Clear previous suggested-action classes first
                 widgets.home_button.remove_css_class("suggested-action");
                 widgets.create_sidebar_button.remove_css_class("suggested-action");
+                widgets.mods_button.remove_css_class("suggested-action");
                 widgets.settings_button.remove_css_class("suggested-action");
                 widgets.logs_button.remove_css_class("suggested-action");
 
@@ -988,6 +1852,9 @@ impl SimpleComponent for AppModel {
                     }
                     Section::CreateInstance => {
                         widgets.create_sidebar_button.add_css_class("suggested-action");
+                    }
+                    Section::Mods => {
+                         widgets.mods_button.add_css_class("suggested-action");
                     }
                     Section::Settings => {
                         widgets.settings_button.add_css_class("suggested-action");
@@ -1011,6 +1878,9 @@ impl SimpleComponent for AppModel {
                     Section::Settings => {
                         widgets.content_stack.set_visible_child_name("settings");
                     }
+                    Section::Mods => {
+                        widgets.content_stack.set_visible_child_name("mods");
+                    }
                     Section::Logs => {
                          widgets.content_stack.set_visible_child_name("logs");
                          // Scroll to bottom of logs?
@@ -1027,6 +1897,7 @@ impl SimpleComponent for AppModel {
                 // Disable sidebar buttons
                 widgets.home_button.set_sensitive(false);
                 widgets.create_sidebar_button.set_sensitive(false);
+                widgets.mods_button.set_sensitive(false);
                 widgets.settings_button.set_sensitive(false);
                 widgets.logs_button.set_sensitive(false);
             }
@@ -1039,6 +1910,7 @@ impl SimpleComponent for AppModel {
                 // Disable sidebar buttons
                 widgets.home_button.set_sensitive(false);
                 widgets.create_sidebar_button.set_sensitive(false);
+                widgets.mods_button.set_sensitive(false);
                 widgets.settings_button.set_sensitive(false);
                 widgets.logs_button.set_sensitive(false);
             }
@@ -1051,6 +1923,7 @@ impl SimpleComponent for AppModel {
                 // Disable sidebar buttons
                 widgets.home_button.set_sensitive(false);
                 widgets.create_sidebar_button.set_sensitive(false);
+                widgets.mods_button.set_sensitive(false);
                 widgets.settings_button.set_sensitive(false);
                 widgets.logs_button.set_sensitive(false);
             }
@@ -1062,7 +1935,11 @@ impl SimpleComponent for AppModel {
 
         // Update common widgets
         widgets.logs_button.set_visible(self.settings.nerd_mode);
+        widgets.logs_button.set_visible(self.settings.nerd_mode);
         widgets.nerd_mode_switch.set_active(self.settings.nerd_mode);
+
+        widgets.mods_button.set_visible(!self.settings.hide_mods_button);
+        widgets.hide_mods_switch.set_active(self.settings.hide_mods_button);
 
         let theme_index = match self.settings.theme {
             Theme::System => 0,
@@ -1072,6 +1949,57 @@ impl SimpleComponent for AppModel {
         if widgets.theme_combo.selected() != theme_index {
             widgets.theme_combo.set_selected(theme_index);
         }
+
+        // Update sidebar constraints to force resize
+        if self.sidebar_collapsed {
+            widgets.navigation_split_view.set_min_sidebar_width(60.0);
+            widgets.navigation_split_view.set_max_sidebar_width(60.0);
+
+            // Center icons when collapsed
+            widgets.home_box.set_halign(gtk::Align::Center);
+            widgets.create_box.set_halign(gtk::Align::Center);
+            widgets.settings_box.set_halign(gtk::Align::Center);
+            widgets.mods_box.set_halign(gtk::Align::Center);
+            widgets.logs_box.set_halign(gtk::Align::Center);
+        } else {
+            // Restore standard width
+            widgets.navigation_split_view.set_min_sidebar_width(180.0);
+            widgets.navigation_split_view.set_max_sidebar_width(250.0);
+
+            // Left align when expanded
+            // Left align when expanded
+            widgets.home_box.set_halign(gtk::Align::Start);
+            widgets.create_box.set_halign(gtk::Align::Start);
+            widgets.settings_box.set_halign(gtk::Align::Start);
+            widgets.mods_box.set_halign(gtk::Align::Start);
+            widgets.logs_box.set_halign(gtk::Align::Start);
+        }
+
+        if let Some(model) = &self.mod_profile_list_model {
+             widgets.mod_profile_dropdown.set_model(Some(model));
+        }
+
+        // Update sidebar visibility (no animation)
+        widgets.home_label.set_visible(!self.sidebar_collapsed);
+        widgets.create_label.set_visible(!self.sidebar_collapsed);
+        widgets.create_label.set_visible(!self.sidebar_collapsed);
+        widgets.settings_label.set_visible(!self.sidebar_collapsed);
+        // Only show mods label if button is visible (which is handled by set_visible above but label is separate in box)
+        // Wait, the sidebar button contains the label.
+        // `create_nav_button` returns (button, label, box).
+        // The `mods_button` visibility controls the whole button (icon+label).
+        // BUT `widgets.mods_label` visibility controls the LABEL specifically (for sidebar collapse).
+        // So we need: if sidebar collapsed -> label hidden.
+        // If mods button hidden -> whole button hidden (so label state doesn't matter).
+        // But if mods button visible -> check sidebar state.
+        if self.is_searching {
+             widgets.mod_search_stack.set_visible_child_name("spinner");
+        } else {
+             widgets.mod_search_stack.set_visible_child_name("button");
+        }
+
+        widgets.mods_label.set_visible(!self.sidebar_collapsed);
+        widgets.logs_label.set_visible(!self.sidebar_collapsed);
     }
 }
 
@@ -1079,10 +2007,9 @@ impl SimpleComponent for AppModel {
 // UI Helper Functions
 // ============================================================================
 
-fn create_sidebar(sender: &ComponentSender<AppModel>) -> (NavigationPage, gtk::Button, gtk::Button, gtk::Button, gtk::Button) {
+fn create_sidebar(sender: &ComponentSender<AppModel>) -> (NavigationPage, gtk::Button, gtk::Button, gtk::Button, gtk::Button, gtk::Button, gtk::Label, gtk::Label, gtk::Label, gtk::Label, gtk::Label, gtk::Box, gtk::Box, gtk::Box, gtk::Box, gtk::Box) {
     let sidebar_content = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
-        .width_request(200)
         .spacing(0)
         .vexpand(true)
         .hexpand(true)
@@ -1094,45 +2021,47 @@ fn create_sidebar(sender: &ComponentSender<AppModel>) -> (NavigationPage, gtk::B
         .margin_end(12)
         .build();
 
+    // Helper to create a styled button with icon and label
+    let create_nav_button = |label_text: &str, icon_name: &str| -> (gtk::Button, gtk::Label, gtk::Box) {
+        let button = gtk::Button::builder()
+            .halign(gtk::Align::Fill)
+            .hexpand(true)
+            .height_request(40)
+            .margin_top(6)
+            .margin_bottom(6)
+            .build();
+
+        let box_container = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(12)
+            .halign(gtk::Align::Start) // Default left align
+            .build();
+
+        let icon = gtk::Image::builder()
+            .icon_name(icon_name)
+            .build();
+
+        let label = gtk::Label::builder()
+            .label(label_text)
+            .visible(true)
+            .build();
+
+        box_container.append(&icon);
+        box_container.append(&label);
+
+        button.set_child(Some(&box_container));
+        (button, label, box_container)
+    };
+
     // Navigation buttons
-    let home_button = gtk::Button::builder()
-        .label("Home")
-        .halign(gtk::Align::Fill)
-        .hexpand(true)
-        .height_request(40)
-        .margin_top(6)
-        .margin_bottom(6)
-        .build();
-
-    // Create New Profile button
-    let create_button = gtk::Button::builder()
-        .label("New Profile")
-        .halign(gtk::Align::Fill)
-        .hexpand(true)
-        .height_request(40)
-        .margin_top(6)
-        .margin_bottom(6)
-        .build();
-
-    let settings_button = gtk::Button::builder()
-        .label("Settings")
-        .halign(gtk::Align::Fill)
-        .hexpand(true)
-        .height_request(40)
-        .margin_top(6)
-        .margin_bottom(6)
-        .build();
+    let (home_button, home_label, home_box) = create_nav_button("Home", "user-home-symbolic");
+    let (create_button, create_label, create_box) = create_nav_button("New Profile", "list-add-symbolic");
+    let (mods_button, mods_label, mods_box) = create_nav_button("Mods", "application-x-addon-symbolic");
+    let (settings_button, settings_label, settings_box) = create_nav_button("Settings", "emblem-system-symbolic");
+    let (logs_button, logs_label, logs_box) = create_nav_button("Logs", "utilities-terminal-symbolic");
 
     // Logs button (hidden by default)
-    let logs_button = gtk::Button::builder()
-        .label("Logs")
-        .halign(gtk::Align::Fill)
-        .hexpand(true)
-        .height_request(40)
-        .margin_top(6)
-        .margin_bottom(6)
-        .visible(false)
-        .build();
+    logs_button.set_visible(false);
 
     // Connect button signals
     let sender_clone = sender.clone();
@@ -1151,6 +2080,11 @@ fn create_sidebar(sender: &ComponentSender<AppModel>) -> (NavigationPage, gtk::B
     });
 
     let sender_clone = sender.clone();
+    mods_button.connect_clicked(move |_| {
+        sender_clone.input(AppMsg::NavigateToSection(Section::Mods));
+    });
+
+    let sender_clone = sender.clone();
     logs_button.connect_clicked(move |_| {
         sender_clone.input(AppMsg::NavigateToSection(Section::Logs));
     });
@@ -1158,6 +2092,7 @@ fn create_sidebar(sender: &ComponentSender<AppModel>) -> (NavigationPage, gtk::B
     // Add buttons to sidebar (Home > Create > Settings)
     sidebar_content.append(&home_button);
     sidebar_content.append(&create_button);
+    sidebar_content.append(&mods_button);
     sidebar_content.append(&settings_button);
     sidebar_content.append(&logs_button);
 
@@ -1168,7 +2103,7 @@ fn create_sidebar(sender: &ComponentSender<AppModel>) -> (NavigationPage, gtk::B
 
     // Version Label
     let version_label = gtk::Label::builder()
-        .label("v0.8 (beta)")
+        .label("v0.9")
         .css_classes(vec!["dim-label".to_string(), "subtitle".to_string()])
         .margin_bottom(12)
         .build();
@@ -1185,7 +2120,7 @@ fn create_sidebar(sender: &ComponentSender<AppModel>) -> (NavigationPage, gtk::B
     // Remove any default background from NavigationPage
     sidebar_page.set_css_classes(&["flat"]);
 
-    (sidebar_page, home_button, create_button, settings_button, logs_button)
+    (sidebar_page, home_button, create_button, mods_button, settings_button, logs_button, home_label, create_label, mods_label, settings_label, logs_label, home_box, create_box, mods_box, settings_box, logs_box)
 }
 
 fn create_loading_widgets() -> (StatusPage, gtk::Spinner, gtk::Label) {
@@ -1365,7 +2300,7 @@ fn create_create_instance_page(
     main_box
 }
 
-fn create_settings_page(sender: &ComponentSender<AppModel>, nerd_mode_switch: &adw::SwitchRow) -> (gtk::Box, adw::ComboRow) {
+fn create_settings_page(sender: &ComponentSender<AppModel>, nerd_mode_switch: &adw::SwitchRow, hide_mods_switch: &adw::SwitchRow) -> (gtk::Box, adw::ComboRow) {
     let main_box = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .hexpand(true)
@@ -1409,6 +2344,14 @@ fn create_settings_page(sender: &ComponentSender<AppModel>, nerd_mode_switch: &a
     nerd_mode_switch.connect_active_notify(move |switch| {
         sender_clone.input(AppMsg::ToggleNerdMode(switch.is_active()));
     });
+
+    // Hide Mods switch configuration
+    let sender_clone = sender.clone();
+    hide_mods_switch.connect_active_notify(move |switch| {
+        sender_clone.input(AppMsg::ToggleHideMods(switch.is_active()));
+    });
+    hide_mods_switch.set_hexpand(true);
+    hide_mods_switch.set_halign(gtk::Align::Fill);
 
     // Theme selection
     let theme_row = adw::ComboRow::builder()
@@ -1456,6 +2399,7 @@ fn create_settings_page(sender: &ComponentSender<AppModel>, nerd_mode_switch: &a
     settings_list.append(&theme_row);
     settings_list.append(&folder_row);
     settings_list.append(nerd_mode_switch);
+    settings_list.append(hide_mods_switch);
 
     // Add list box to main content
     content_container.append(&settings_list);
@@ -1486,14 +2430,14 @@ fn create_settings_page(sender: &ComponentSender<AppModel>, nerd_mode_switch: &a
         .title("Source Code")
         .subtitle("https://github.com/vdkvdev/rcraft")
         .build();
-    
+
     // Make repo row clickable or have a button
     // Let's add a button to open it
     let repo_button = gtk::Button::builder()
         .label("View")
         .valign(gtk::Align::Center)
         .build();
-    
+
     // Add logic to open link
     repo_button.connect_clicked(move |_| {
          let _ = std::process::Command::new("xdg-open")

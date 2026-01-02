@@ -1,11 +1,5 @@
-// models.rs - Data models for RCraft
-
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-
-// ============================================================================
-// Minecraft API Models
-// ============================================================================
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MinecraftVersion {
@@ -67,10 +61,6 @@ impl Library {
     }
 }
 
-// ============================================================================
-// Asset Models
-// ============================================================================
-
 #[derive(Deserialize, Debug, Clone)]
 pub struct AssetIndex {
     pub id: String,
@@ -87,10 +77,6 @@ pub struct AssetObject {
     pub hash: String,
 }
 
-// ============================================================================
-// Application Models
-// ============================================================================
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Profile {
     pub username: String,
@@ -102,6 +88,8 @@ pub struct Profile {
     pub last_launch: Option<u64>,
     #[serde(default)]
     pub is_fabric: bool,
+    #[serde(default)]
+    pub game_dir: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -110,13 +98,8 @@ pub enum Section {
     CreateInstance,
     Settings,
     Logs,
+    Mods,
 }
-
-
-
-
-
-
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum Theme {
@@ -139,4 +122,41 @@ impl std::fmt::Display for Theme {
             Theme::System => write!(f, "System"),
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModSearchResult {
+    pub project_id: String,
+    pub title: String,
+    pub description: Option<String>,
+    pub author: String,
+    pub icon_url: Option<String>,
+    pub versions: Option<Vec<String>>,
+    pub follows: u32,
+    pub downloads: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModVersion {
+    pub id: String,
+    pub project_id: String,
+    pub name: String,
+    pub version_number: String,
+    pub game_versions: Vec<String>,
+    pub loaders: Vec<String>,
+    pub files: Vec<ModFile>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModFile {
+    pub hashes: ModFileHashes,
+    pub url: String,
+    pub filename: String,
+    pub primary: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModFileHashes {
+    pub sha1: String,
+    pub sha512: String,
 }
