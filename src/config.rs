@@ -1,7 +1,7 @@
 use anyhow::Result;
 use std::env;
 use std::path::PathBuf;
-use tokio::fs;
+
 
 #[derive(Clone)]
 pub struct LauncherConfig {
@@ -9,6 +9,7 @@ pub struct LauncherConfig {
     pub versions_dir: PathBuf,
     pub assets_dir: PathBuf,
     pub libraries_dir: PathBuf,
+    pub runtimes_dir: PathBuf,
 }
 
 impl LauncherConfig {
@@ -20,15 +21,10 @@ impl LauncherConfig {
             versions_dir: minecraft_dir.join("versions"),
             assets_dir: minecraft_dir.join("assets"),
             libraries_dir: minecraft_dir.join("libraries"),
+            runtimes_dir: minecraft_dir.join("runtimes"),
             minecraft_dir,
         })
     }
 
-    pub async fn ensure_directories(&self) -> Result<()> {
-        fs::create_dir_all(&self.minecraft_dir).await?;
-        fs::create_dir_all(&self.versions_dir).await?;
-        fs::create_dir_all(&self.assets_dir).await?;
-        fs::create_dir_all(&self.libraries_dir).await?;
-        Ok(())
-    }
+
 }

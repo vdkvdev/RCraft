@@ -4,8 +4,8 @@ mod utils;
 mod launcher;
 mod ui;
 mod settings;
+mod java_manager;
 mod modrinth_client;
-mod mods_ui;
 
 use adw::Application;
 use gtk4::glib;
@@ -19,6 +19,9 @@ fn main() {
         .build();
 
     glib::set_application_name("RCraft");
+
+
+
     let relm_app = RelmApp::from_app(app);
     relm_app.run::<AppModel>(())
 }

@@ -15,7 +15,7 @@ impl ModrinthClient {
     pub fn new() -> Self {
         Self {
             client: Client::builder()
-                .user_agent("rcraft/0.9.0 (rcraft@gmail.com)") // fake email. just for modrinth
+                .user_agent("rcraft/1.0.0 (rcraft@gmail.com)") // fake email. just for modrinth
                 .build()
                 .unwrap_or_default(),
         }
@@ -157,19 +157,7 @@ impl ModrinthClient {
         Ok(())
     }
 
-    pub async fn download_icon(&self, url: &str, destination: &PathBuf) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        if let Some(parent) = destination.parent() {
-            tokio::fs::create_dir_all(parent).await?;
-        }
 
-        let response = self.client.get(url).send().await?;
-        let bytes = response.bytes().await?;
-
-        let mut file = File::create(destination)?;
-        file.write_all(&bytes)?;
-
-        Ok(())
-    }
 
     pub async fn download_icon_bytes(&self, url: &str) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
         let response = self.client.get(url).send().await?;

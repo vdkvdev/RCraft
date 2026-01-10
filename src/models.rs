@@ -64,18 +64,9 @@ impl Library {
 #[derive(Deserialize, Debug, Clone)]
 pub struct AssetIndex {
     pub id: String,
-    pub url: String,
 }
 
-#[derive(Deserialize, Debug, Clone)]
-pub struct AssetIndexJson {
-    pub objects: HashMap<String, AssetObject>,
-}
 
-#[derive(Deserialize, Debug, Clone)]
-pub struct AssetObject {
-    pub hash: String,
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Profile {

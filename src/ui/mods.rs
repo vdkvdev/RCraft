@@ -1,8 +1,9 @@
 use relm4::gtk;
 use relm4::{ComponentSender, RelmWidgetExt};
 use gtk::prelude::*;
-use crate::ui::{AppModel, AppMsg};
-use crate::models::{ModSearchResult};
+use crate::ui::model::AppModel;
+use crate::ui::msg::AppMsg;
+use crate::models::ModSearchResult;
 
 pub fn create_mods_page(sender: &ComponentSender<AppModel>) -> (gtk::Box, gtk::SearchEntry, gtk::Button, gtk::Stack, gtk::ListBox, gtk::ListBox, gtk::DropDown) {
     let container = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -195,12 +196,25 @@ pub fn create_mod_search_result_row(mod_data: &ModSearchResult, sender: &Compone
         sender_clone.input(AppMsg::ModActionButtonClicked(project_id.clone()));
     });
 
+    let view_button = gtk::Button::builder()
+        .icon_name("web-browser-symbolic")
+        .tooltip_text("View on Modrinth")
+        .valign(gtk::Align::Center)
+        .build();
+
+    let project_id_clone_2 = mod_data.project_id.clone();
+    let sender_clone_2 = sender.clone();
+    view_button.connect_clicked(move |_| {
+        sender_clone_2.input(AppMsg::OpenModrinthPage(project_id_clone_2.clone()));
+    });
+
     box_container.append(&icon);
     box_container.append(&info_box);
 
     let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     spacer.set_hexpand(true);
     box_container.append(&spacer);
+    box_container.append(&view_button);
     box_container.append(&download_button);
 
     row.set_child(Some(&box_container));

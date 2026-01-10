@@ -1,4 +1,4 @@
-use anyhow::Result;
+
 use std::cmp::Ordering;
 
 use crate::models::Library;
@@ -33,19 +33,6 @@ pub fn is_at_least_1_14(v: &str) -> bool {
     p.0 > 1 || (p.0 == 1 && p.1 >= 14)
 }
 
-pub fn get_total_ram_mb() -> Result<u32> {
-    let content = std::fs::read_to_string("/proc/meminfo")?;
-    for line in content.lines() {
-        if line.starts_with("MemTotal:") {
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() >= 2 {
-                let kb: u64 = parts[1].parse()?;
-                return Ok((kb / 1024) as u32);
-            }
-        }
-    }
-    anyhow::bail!("Could not read total RAM from /proc/meminfo")
-}
 
 pub fn is_library_allowed(lib: &Library, os_name: &str) -> bool {
     let rules = match &lib.rules {

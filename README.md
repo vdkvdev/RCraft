@@ -30,7 +30,7 @@ With a focus on speed, aesthetics, and usability, RCraft integrates perfectly wi
 - **Profile System**: Create and manage multiple isolated game profiles with custom settings.
 - **Integrated Mod Browser**: Search, download, and install mods directly from Modrinth.
 - **Performance First**: Lightweight footprint and fast startup times powered by Rust.
-- **Auto-Java Detection**: Automatically finds and selects the appropriate Java Runtime Environment for your game version.
+- **Auto-Java Management**: Automatically downloads and configures the exact Java version required for each Minecraft instance, ensuring perfect compatibility.
 
 ## Usage
 
