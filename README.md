@@ -20,7 +20,7 @@
 With a focus on speed, aesthetics, and usability, RCraft integrates perfectly with modern Linux desktop environments thanks to **Libadwaita**.
 
 <div align="center">
-  <img src="media/ss1.png" alt="RCraft" width="800"/>
+  <img src="media/s1.png" alt="RCraft" width="800"/>
 </div>
 
 ## Features
@@ -52,23 +52,23 @@ RCraft is distributed as an **AppImage**, a universal package that runs on almos
 
 ## Screenshot
 <div align="center">
-  <img src="media/ss2.png" alt="RCraft" width="800"/>
+  <img src="media/s2.png" alt="RCraft" width="800"/>
 </div>
 
 <div align="center">
-  <img src="media/ss3.png" alt="RCraft" width="800"/>
+  <img src="media/s3.png" alt="RCraft" width="800"/>
 </div>
 
 <div align="center">
-<img src="media/ss4.png" alt="RCraft" width="800"/>
+<img src="media/s4.png" alt="RCraft" width="800"/>
 </div>
 
 <div align="center">
-<img src="media/ss5.png" alt="RCraft" width="800"/>
+<img src="media/s5.png" alt="RCraft" width="800"/>
 </div>
 
 <div align="center">
-<img src="media/ss6.png" alt="RCraft" width="800"/>
+<img src="media/s6.png" alt="RCraft" width="800"/>
 </div>
 
 ## License
