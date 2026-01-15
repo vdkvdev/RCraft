@@ -9,7 +9,7 @@
 [![Rust](https://img.shields.io/badge/Made_with-Rust-orange?style=flat-square&logo=rust)](https://www.rust-lang.org/)
 [![GTK4](https://img.shields.io/badge/GUI-GTK4-blue?style=flat-square&logo=gtk)](https://www.gtk.org/)
 [![License](https://img.shields.io/badge/License-GPL_v3-green?style=flat-square)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-0.9.0-purple?style=flat-square)]()
+[![Version](https://img.shields.io/badge/Version-1.1.0-purple?style=flat-square)]()
 
 </div>
 
@@ -65,6 +65,10 @@ RCraft is distributed as an **AppImage**, a universal package that runs on almos
 
 <div align="center">
 <img src="media/ss5.png" alt="RCraft" width="800"/>
+</div>
+
+<div align="center">
+<img src="media/ss6.png" alt="RCraft" width="800"/>
 </div>
 
 ## License

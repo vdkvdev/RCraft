@@ -6,7 +6,7 @@ use crate::ui::model::AppModel;
 use crate::ui::msg::AppMsg;
 use crate::models::Theme;
 
-pub fn create_settings_page(sender: &ComponentSender<AppModel>, nerd_mode_switch: &adw::SwitchRow, hide_mods_switch: &adw::SwitchRow) -> (gtk::ScrolledWindow, adw::ComboRow) {
+pub fn create_settings_page(sender: &ComponentSender<AppModel>, hide_logs_switch: &adw::SwitchRow, hide_mods_switch: &adw::SwitchRow) -> (gtk::ScrolledWindow, adw::ComboRow) {
     let scrolled_window = gtk::ScrolledWindow::builder()
         .hexpand(true)
         .vexpand(true)
@@ -39,15 +39,15 @@ pub fn create_settings_page(sender: &ComponentSender<AppModel>, nerd_mode_switch
     settings_list.set_hexpand(true);
     settings_list.set_halign(gtk::Align::Fill);
 
-    // Nerd Mode switch configuration
-    nerd_mode_switch.set_title("Nerd Mode");
-    nerd_mode_switch.set_subtitle("Enable advanced features and logs");
-    nerd_mode_switch.set_hexpand(true);
-    nerd_mode_switch.set_halign(gtk::Align::Fill);
+    // Hide Logs switch configuration
+    hide_logs_switch.set_title("Hide Console");
+    hide_logs_switch.set_subtitle("Hide the logs tab");
+    hide_logs_switch.set_hexpand(true);
+    hide_logs_switch.set_halign(gtk::Align::Fill);
 
     let sender_clone = sender.clone();
-    nerd_mode_switch.connect_active_notify(move |switch| {
-        sender_clone.input(AppMsg::ToggleNerdMode(switch.is_active()));
+    hide_logs_switch.connect_active_notify(move |switch| {
+        sender_clone.input(AppMsg::ToggleHideLogs(switch.is_active()));
     });
 
     // Hide Mods switch configuration
@@ -57,6 +57,9 @@ pub fn create_settings_page(sender: &ComponentSender<AppModel>, nerd_mode_switch
     });
     hide_mods_switch.set_hexpand(true);
     hide_mods_switch.set_halign(gtk::Align::Fill);
+    hide_mods_switch.set_title("Hide Mods");
+    hide_mods_switch.set_subtitle("Hide the Mods button in the sidebar");
+
 
     // Theme selection
     let theme_row = adw::ComboRow::builder()
@@ -65,12 +68,13 @@ pub fn create_settings_page(sender: &ComponentSender<AppModel>, nerd_mode_switch
         .halign(gtk::Align::Fill)
         .build();
 
-    let theme_model = gtk::StringList::new(&["System", "Light", "Dark"]);
+    let theme_model = gtk::StringList::new(&["System", "Light", "Dark", "Transparent"]);
     theme_row.set_model(Some(&theme_model));
 
     let sender_clone = sender.clone();
     theme_row.connect_notify(Some("selected"), move |combo, _| {
         let theme = match combo.selected() {
+            3 => Theme::Transparent,
             2 => Theme::Dark,
             1 => Theme::Light,
             _ => Theme::System,
@@ -103,7 +107,7 @@ pub fn create_settings_page(sender: &ComponentSender<AppModel>, nerd_mode_switch
     // Add rows to list box
     settings_list.append(&theme_row);
     settings_list.append(&folder_row);
-    settings_list.append(nerd_mode_switch);
+    settings_list.append(hide_logs_switch);
     settings_list.append(hide_mods_switch);
 
     // Add list box to main content
@@ -131,9 +135,7 @@ pub fn create_settings_page(sender: &ComponentSender<AppModel>, nerd_mode_switch
 
     // Add logic to open link
     repo_button.connect_clicked(move |_| {
-         let _ = std::process::Command::new("xdg-open")
-             .arg("https://github.com/vdkvdev/rcraft")
-             .spawn();
+         let _ = open::that("https://github.com/vdkvdev/rcraft");
     });
 
     repo_row.add_suffix(&repo_button);

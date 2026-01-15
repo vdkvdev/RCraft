@@ -8,7 +8,7 @@ pub enum AppMsg {
     DeleteProfile(String),
     UsernameChanged(String),
     VersionSelected(String),
-    RamChanged(()),
+    RamChanged(u32),
     ToggleFabric(bool),
     SaveProfile,
     // CancelCreate removed
@@ -25,7 +25,7 @@ pub enum AppMsg {
     OpenMinecraftFolder,
     // ShowAboutWindow removed
     ThemeSelected(Theme),
-    ToggleNerdMode(bool),
+    ToggleHideLogs(bool),
     ToggleHideMods(bool),
     ToggleSidebar,
     Log(String),

@@ -15,7 +15,7 @@ pub struct AppWidgets {
     pub create_page: gtk::Box,
     pub settings_page: gtk::ScrolledWindow,
     pub mods_page: gtk::Box,
-    pub logs_page: gtk::ScrolledWindow,
+    pub logs_page: gtk::Box,
     pub loading_page: adw::StatusPage,
 
     // Home page widgets
@@ -24,7 +24,7 @@ pub struct AppWidgets {
     pub version_combo: adw::ComboRow,
     pub ram_scale: adw::SpinRow,
     pub fabric_switch: adw::SwitchRow,
-    pub nerd_mode_switch: adw::SwitchRow,
+    pub hide_logs_switch: adw::SwitchRow,
     pub hide_mods_switch: adw::SwitchRow,
 
     // Buttons

@@ -1,6 +1,6 @@
 [package]
 name = "RCraft"
-version = "1.0.0"
+version = "1.1.0"
 edition = "2024"
 description = "Minecraft Launcher for Linux"
 license = "GPL-3.0"
@@ -23,6 +23,8 @@ relm4 = { version = "0.9", features = ["macros"] }
 
 adw = { version = "0.7", package = "libadwaita", features = ["v1_2", "v1_4"] }
 futures = "0.3.31"
+dirs = "5.0"
+open = "5.0"
 
 
 [profile.release]

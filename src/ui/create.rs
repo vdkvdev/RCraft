@@ -66,8 +66,8 @@ pub fn create_create_instance_page(
 
     // RAM adjustment
     let sender_clone = sender.clone();
-    ram_scale.adjustment().connect_value_changed(move |_| {
-        sender_clone.input(AppMsg::RamChanged(()));
+    ram_scale.adjustment().connect_value_changed(move |adj| {
+        sender_clone.input(AppMsg::RamChanged(adj.value() as u32));
     });
 
     let sender_clone = sender.clone();

@@ -5,6 +5,7 @@ mod launcher;
 mod ui;
 mod settings;
 mod java_manager;
+mod library_manager;
 mod modrinth_client;
 
 use adw::Application;

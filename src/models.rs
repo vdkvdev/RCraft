@@ -61,9 +61,32 @@ impl Library {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Deserialize, Debug, Clone)]
 pub struct AssetIndex {
     pub id: String,
+    pub sha1: String,
+    pub size: u64,
+    #[serde(rename = "totalSize")]
+    pub total_size: u64,
+    pub url: String,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Deserialize)]
+pub struct AssetObject {
+    pub hash: String,
+    pub size: u64,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Deserialize)]
+pub struct AssetIndexFile {
+    #[serde(default, rename = "virtual")]
+    pub is_virtual: bool,
+    #[serde(default)]
+    pub map_to_resources: bool,
+    pub objects: HashMap<String, AssetObject>,
 }
 
 
@@ -97,6 +120,7 @@ pub enum Theme {
     Dark,
     Light,
     System,
+    Transparent,
 }
 
 impl Default for Theme {
@@ -111,6 +135,7 @@ impl std::fmt::Display for Theme {
             Theme::Dark => write!(f, "Dark"),
             Theme::Light => write!(f, "Light"),
             Theme::System => write!(f, "System"),
+            Theme::Transparent => write!(f, "Transparent"),
         }
     }
 }
@@ -150,4 +175,40 @@ pub struct ModFile {
 pub struct ModFileHashes {
     pub sha1: String,
     pub sha512: String,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct VersionJson {
+    #[serde(rename = "inheritsFrom")]
+    pub inherits_from: Option<String>,
+    #[serde(rename = "javaVersion")]
+    pub java_version: Option<JavaVersion>,
+    #[serde(default)]
+    pub libraries: Vec<Library>,
+    #[serde(rename = "mainClass")]
+    pub main_class: Option<String>,
+    #[serde(rename = "assetIndex")]
+    pub asset_index: Option<AssetIndex>,
+    pub downloads: Option<VersionDownloads>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, Debug, Clone)]
+pub struct VersionDownloads {
+    pub client: Option<DownloadFile>,
+    pub server: Option<DownloadFile>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, Debug, Clone)]
+pub struct DownloadFile {
+    pub sha1: String,
+    pub size: u64,
+    pub url: String,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct JavaVersion {
+    #[serde(rename = "majorVersion")]
+    pub major_version: u32,
 }

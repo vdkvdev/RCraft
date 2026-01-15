@@ -93,8 +93,8 @@ pub fn create_sidebar(sender: &ComponentSender<AppModel>) -> (NavigationPage, gt
     sidebar_content.append(&home_button);
     sidebar_content.append(&create_button);
     sidebar_content.append(&mods_button);
-    sidebar_content.append(&settings_button);
     sidebar_content.append(&logs_button);
+    sidebar_content.append(&settings_button);
 
     // Add spacer to push content to top
     let spacer = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -103,7 +103,7 @@ pub fn create_sidebar(sender: &ComponentSender<AppModel>) -> (NavigationPage, gt
 
     // Version Label
     let version_label = gtk::Label::builder()
-        .label("v1.0")
+        .label("v1.1")
         .css_classes(vec!["dim-label".to_string(), "subtitle".to_string()])
         .margin_bottom(12)
         .build();

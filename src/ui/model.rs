@@ -79,6 +79,9 @@ pub struct AppModel {
     pub sender: ComponentSender<AppModel>,
 
     pub java_dialog_request: Option<u32>,
+
+    // Shared Tokio Runtime
+    pub rt: std::sync::Arc<tokio::runtime::Runtime>,
 }
 
 impl AppModel {

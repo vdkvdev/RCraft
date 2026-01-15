@@ -1,7 +1,5 @@
 use anyhow::Result;
-use std::env;
 use std::path::PathBuf;
-
 
 #[derive(Clone)]
 pub struct LauncherConfig {
@@ -14,8 +12,7 @@ pub struct LauncherConfig {
 
 impl LauncherConfig {
     pub fn new() -> Result<Self> {
-        let home = env::var("HOME").unwrap();
-        let minecraft_dir = PathBuf::from(home).join(".minecraft");
+        let minecraft_dir = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Could not find home directory"))?.join(".minecraft");
 
         Ok(Self {
             versions_dir: minecraft_dir.join("versions"),

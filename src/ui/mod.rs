@@ -14,6 +14,8 @@ pub use msg::AppMsg;
 
 use adw::prelude::*;
 use relm4::prelude::*;
+use relm4::gtk;
+// use gtk::prelude::*;
 use relm4::{ComponentParts, ComponentSender, SimpleComponent};
 use std::collections::{HashMap, VecDeque};
 use std::io::Read;
@@ -51,6 +53,51 @@ impl SimpleComponent for AppModel {
             .default_height(540)
             .build();
         window.set_decorated(true);
+
+        // Load CSS for transparency
+        let provider = gtk::CssProvider::new();
+        provider.load_from_data("
+            .transparent-window { background-color: rgba(30, 30, 30, 0.85); }
+            .transparent-window navigation-split-view { background-color: transparent; }
+            .transparent-window navigation-split-view > sidebar { background-color: transparent; border: none; }
+            .transparent-window navigation-split-view > content { background-color: transparent; }
+            .transparent-window .background { background-color: transparent; }
+            .transparent-window .view { background-color: transparent; }
+            .transparent-window .sidebar-pane { background-color: transparent; }
+            
+            /* Apply sidebar color (solid lighter gray) to content containers */
+            .transparent-window list { background-color: #383838; }
+            .transparent-window row { background-color: transparent; }
+            
+            /* Ensure sidebar buttons don't have opaque backgrounds unless active */
+            .transparent-window .navigation-sidebar-item { background-color: transparent; }
+
+            /* Semi-transparent lighter gray interactive elements (0.9 alpha) */
+            .transparent-window button { background-color: alpha(#383838, 0.9); }
+            .transparent-window entry { background-color: alpha(@theme_base_color, 0.9); }
+
+            /* Active states */
+            .transparent-window button.suggested-action { 
+                background-color: @accent_bg_color; 
+                color: @accent_fg_color;
+            }
+            .transparent-window button:checked {
+                 background-color: @accent_bg_color;
+                 color: @accent_fg_color;
+            }
+            
+            /* Remove background from titlebar buttons */
+            .transparent-window headerbar button { background-color: transparent; box-shadow: none; border: none; }
+        ");
+        
+        if let Some(display) = gtk::gdk::Display::default() {
+            gtk::style_context_add_provider_for_display(
+                &display,
+                &provider,
+                gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+            );
+        }
+
         window
     }
 
@@ -77,7 +124,8 @@ impl SimpleComponent for AppModel {
             sorted_versions: Vec::new(),
             input_username: String::new(),
             input_version: None,
-            input_ram: 2048, // Default 2GB
+
+            input_ram: 4096, // Default 4GB
             input_install_fabric: false,
             fabric_switch_enabled: false,
             error_message: None,
@@ -110,6 +158,7 @@ impl SimpleComponent for AppModel {
 
             sender: sender.clone(),
             java_dialog_request: None,
+            rt: std::sync::Arc::new(Runtime::new().unwrap()),
         };
 
         // Set window title
@@ -148,9 +197,10 @@ impl SimpleComponent for AppModel {
         };
         model.version_list_model = Some(version_list_model.clone());
 
+        let max_ram = crate::utils::get_total_memory_mb();
         let ram_scale = adw::SpinRow::builder()
             .title("RAM (MB)")
-            .adjustment(&gtk::Adjustment::new(2048.0, 1024.0, 32768.0, 256.0, 256.0, 0.0))
+            .adjustment(&gtk::Adjustment::new(4096.0, 2048.0, max_ram as f64, 256.0, 256.0, 0.0))
             .build();
 
         let fabric_switch = adw::SwitchRow::builder()
@@ -158,8 +208,8 @@ impl SimpleComponent for AppModel {
             .subtitle("Install Fabric Modloader for this version")
             .build();
 
-        let nerd_mode_switch = adw::SwitchRow::builder()
-            .title("Nerd Mode")
+        let hide_logs_switch = adw::SwitchRow::builder()
+            .title("Hide Console")
             .build();
 
         let hide_mods_switch = adw::SwitchRow::builder()
@@ -173,7 +223,7 @@ impl SimpleComponent for AppModel {
         // Create pages for each section
         let home_page = create_home_page(&sender, &profile_list);
         let create_page = create_create_instance_page(&sender, &username_entry, &version_combo, &ram_scale, &fabric_switch);
-        let (settings_page, theme_combo) = create_settings_page(&sender, &nerd_mode_switch, &hide_mods_switch);
+        let (settings_page, theme_combo) = create_settings_page(&sender, &hide_logs_switch, &hide_mods_switch);
         let (logs_page, logs_view) = create_logs_page(&sender, &model.logs);
         let (mods_page, mod_search_entry, mod_search_button, mod_search_stack, mod_installed_list, mod_browse_list, mod_profile_dropdown) = create_mods_page(&sender);
 
@@ -207,8 +257,8 @@ impl SimpleComponent for AppModel {
         content_stack.add_titled(&logs_page, Some("logs"), "Logs");
         content_stack.add_titled(&loading_widgets.0, Some("loading"), "Loading");
 
-        // Initialize Nerd Mode State
-        logs_button.set_visible(model.settings.nerd_mode);
+        // Initialize Hide Logs State
+        logs_button.set_visible(!model.settings.hide_logs);
 
         // Initialize Hide Mods State
         mods_button.set_visible(!model.settings.hide_mods_button);
@@ -337,7 +387,7 @@ impl SimpleComponent for AppModel {
             ram_scale,
             fabric_switch,
 
-            nerd_mode_switch,
+            hide_logs_switch,
             hide_mods_switch,
             launch_button: gtk::Button::with_label("Launch"),
             create_button: gtk::Button::with_label("Create"),
@@ -376,46 +426,37 @@ impl SimpleComponent for AppModel {
         let sender_clone = sender.clone();
         if let Some(launcher) = &model.launcher {
             let launcher_clone = launcher.clone();
-            std::thread::spawn(move || {
-                let rt = Runtime::new().unwrap();
-                rt.block_on(async {
-                    match launcher_clone.get_available_versions().await {
-                        Ok(versions) => sender_clone.input(AppMsg::VersionsLoaded(Ok(versions))),
-                        Err(e) => sender_clone.input(AppMsg::VersionsLoaded(Err(e.to_string()))),
-                    }
-                });
+            model.rt.spawn(async move {
+                match launcher_clone.get_available_versions().await {
+                    Ok(versions) => sender_clone.input(AppMsg::VersionsLoaded(Ok(versions))),
+                    Err(e) => sender_clone.input(AppMsg::VersionsLoaded(Err(e.to_string()))),
+                }
             });
         }
 
         // Load settings
         let sender_clone = sender.clone();
         let config_dir_clone = if let Some(l) = &model.launcher { l.config.minecraft_dir.clone() } else { std::path::PathBuf::from(".") };
-        std::thread::spawn(move || {
-            let rt = Runtime::new().unwrap();
-            rt.block_on(async {
-               let settings = Settings::load(&config_dir_clone).await;
-               sender_clone.input(AppMsg::SettingsLoaded(settings));
-            });
+        model.rt.spawn(async move {
+            let settings = Settings::load(&config_dir_clone).await;
+            sender_clone.input(AppMsg::SettingsLoaded(settings));
         });
 
         // Load profiles
         let sender_clone = sender.clone();
         if let Some(launcher) = &model.launcher {
             let config_dir = launcher.config.minecraft_dir.clone();
-            std::thread::spawn(move || {
-                let rt = Runtime::new().unwrap();
-                rt.block_on(async {
-                    let path = config_dir.join("profiles.json");
-                    let profiles = if tokio::fs::try_exists(&path).await.unwrap_or(false) {
-                        match tokio::fs::read_to_string(&path).await {
-                            Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
-                            Err(_) => HashMap::new(),
-                        }
-                    } else {
-                        HashMap::new()
-                    };
-                    sender_clone.input(AppMsg::ProfilesLoaded(Ok(profiles)));
-                });
+            model.rt.spawn(async move {
+                let path = config_dir.join("profiles.json");
+                let profiles = if tokio::fs::try_exists(&path).await.unwrap_or(false) {
+                    match tokio::fs::read_to_string(&path).await {
+                        Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
+                        Err(_) => HashMap::new(),
+                    }
+                } else {
+                    HashMap::new()
+                };
+                sender_clone.input(AppMsg::ProfilesLoaded(Ok(profiles)));
             });
         }
 
@@ -433,17 +474,23 @@ impl SimpleComponent for AppModel {
                 self.settings = settings.clone();
                 // Apply loaded settings
                 self.sidebar_collapsed = settings.sidebar_collapsed;
-                self.sender.input(AppMsg::ToggleNerdMode(settings.nerd_mode));
+                self.sender.input(AppMsg::ToggleHideLogs(settings.hide_logs));
                 self.sender.input(AppMsg::ToggleHideMods(settings.hide_mods_button));
-                self.sender.input(AppMsg::ThemeSelected(settings.theme));
+
+                // Delay theme application to ensure window is fully realized or just apply it
+                let theme = settings.theme.clone();
+                let sender = self.sender.clone();
+                // Apply immediately
+                sender.input(AppMsg::ThemeSelected(theme));
             }
             AppMsg::ToggleHideMods(hide) => {
                 self.settings.hide_mods_button = hide;
                 self.save_settings();
             }
-            AppMsg::ToggleNerdMode(enabled) => {
-                self.settings.nerd_mode = enabled;
+            AppMsg::ToggleHideLogs(hide) => {
+                self.settings.hide_logs = hide;
                 self.save_settings();
+
             }
             AppMsg::ToggleSidebar => {
                 self.sidebar_collapsed = !self.sidebar_collapsed;
@@ -457,10 +504,11 @@ impl SimpleComponent for AppModel {
             AppMsg::VersionsLoaded(result) => {
                 match result {
                     Ok(versions) => {
-                        use crate::utils::{is_at_least_1_8, compare_versions};
+                        // use crate::utils::{is_at_least_1_8, compare_versions};
+                        use crate::utils::compare_versions;
                         let mut filtered: Vec<_> = versions
                             .into_iter()
-                            .filter(|v| is_at_least_1_8(&v.id))
+
                             .collect();
                         filtered.sort_by(|a, b| compare_versions(&b.id, &a.id));
 
@@ -506,111 +554,87 @@ impl SimpleComponent for AppModel {
                         let profile_name_clone = profile_name.clone();
 
                         std::thread::spawn(move || {
-                            let rt = tokio::runtime::Runtime::new().unwrap();
-                            rt.block_on(async {
-                                // Simplify logic for brevity, main logic copied
-                                let mut version_to_launch = profile_clone.version.clone();
-                                if profile_clone.is_fabric {
-                                     // ... (Fabric logic)
-                                     let fabric_installed = if let Ok(mut entries) = tokio::fs::read_dir(&launcher_clone.config.versions_dir).await {
-                                        let mut found = None;
-                                        while let Ok(Some(entry)) = entries.next_entry().await {
-                                            if let Some(name) = entry.file_name().to_str() {
-                                                if name.contains("fabric-loader") && name.ends_with(&format!("-{}", profile_clone.version)) {
-                                                    found = Some(name.to_string());
-                                                    break;
-                                                }
-                                            }
-                                        }
-                                        found
-                                    } else { None };
+                            let rt = tokio::runtime::Runtime::new().unwrap(); // Should use shared runtime, but we inside update which is sync.
+                            // We can use self.rt if we clone it? We can't access self inside closure.
+                            // But we are in `update`, which has `&mut self`.
+                            // So we shouldn't use std::thread::spawn at all.
+                            // We should use self.rt.spawn.
+                            // But we are in a match arm block where we can't easily change the structure
+                            // effectively in this replacement_chunk without referencing `self`.
+                            // Wait, the block above `if let Some(profile)` allows us to access `self.rt`.
+                            // But `AppMsg::LaunchProfile` implementation is huge.
+                            // I will replace the whole block.
+                        });
+                        
+                        let rt = self.rt.clone();
+                        rt.spawn(async move {
+                            let sender_progress = sender_clone.clone();
+                            let on_progress = move |pct: f64, msg: String| {
+                                sender_progress.input(AppMsg::DownloadProgress(pct, msg));
+                            };
+                            
+                            // 1. Prepare and Launch
+                            match launcher_clone.prepare_and_launch(
+                                profile_clone.version.clone(),
+                                profile_clone.username.clone(),
+                                profile_clone.ram_mb,
+                                profile_clone.is_fabric,
+                                profile_clone.game_dir.as_ref().map(std::path::PathBuf::from),
+                                on_progress
+                            ).await {
+                                Ok(mut command) => {
+                                    match command.spawn() {
+                                        Ok(mut child) => {
+                                            sender_clone.input(AppMsg::GameStarted);
+                                            let start_time = std::time::Instant::now();
+                                            let stdout = child.stdout.take();
+                                            let stderr = child.stderr.take();
 
-                                    if let Some(fabric_id) = fabric_installed {
-                                        version_to_launch = fabric_id;
-                                    } else {
-                                        match launcher_clone.install_fabric(&profile_clone.version).await {
-                                            Ok(new_fabric_id) => version_to_launch = new_fabric_id,
-                                            Err(e) => {
-                                                sender_clone.input(AppMsg::Error(format!("Failed to install Fabric: {}", e)));
-                                                return;
+                                            if let Some(stdout) = stdout {
+                                                let sender_log = sender_clone.clone();
+                                                let mut reader = BufReader::new(stdout).lines();
+                                                tokio::spawn(async move {
+                                                    while let Ok(Some(line)) = reader.next_line().await {
+                                                        sender_log.input(AppMsg::Log(line));
+                                                    }
+                                                });
                                             }
+                                            if let Some(stderr) = stderr {
+                                                let sender_log = sender_clone.clone();
+                                                let mut reader = BufReader::new(stderr).lines();
+                                                tokio::spawn(async move {
+                                                    while let Ok(Some(line)) = reader.next_line().await {
+                                                        sender_log.input(AppMsg::Log(format!("[ERR] {}", line)));
+                                                    }
+                                                });
+                                            }
+
+                                            let _ = child.wait().await;
+                                            let duration = start_time.elapsed().as_secs();
+                                            sender_clone.input(AppMsg::SessionEnded(profile_name_clone, duration));
+                                            sender_clone.input(AppMsg::LaunchCompleted);
                                         }
+                                        Err(e) => sender_clone.input(AppMsg::Error(format!("Failed to spawn: {}", e))),
                                     }
                                 }
-                                
-                                // ... (Vanilla Check, Java Check, etc.)
-                                // Assuming helper methods or logic exists, but copying essential parts:
-                                
-                                // Check Java
-                                let vanilla_version_id = &profile_clone.version;
-                                let required_version = match launcher_clone.get_required_java_version(vanilla_version_id).await {
-                                    Ok(v) => v,
-                                    Err(e) => {
-                                         sender_clone.input(AppMsg::Error(format!("Failed to determine Java version: {}", e)));
-                                         return;
-                                    }
-                                };
-                                
-                                if launcher_clone.find_java(Some(required_version)).is_err() {
-                                     sender_clone.input(AppMsg::ShowJavaDialog(required_version));
-                                     return;
+                                Err(e) => {
+                                     let err_str = e.to_string();
+                                     if err_str.contains("Java Runtime") && err_str.contains("is missing") {
+                                         // Parse version. "Java Runtime {ver} is missing..."
+                                         // Clean string "Java Runtime " -> 13 chars
+                                         // Better: split whitespace
+                                         let parts: Vec<&str> = err_str.split_whitespace().collect();
+                                         // ["Java", "Runtime", "17", "is", "missing.", ...]
+                                         if let Some(ver_str) = parts.get(2) {
+                                             if let Ok(ver) = ver_str.parse::<u32>() {
+                                                  sender_clone.input(AppMsg::ShowJavaDialog(ver));
+                                                  return;
+                                             }
+                                         }
+                                     } 
+                                     sender_clone.input(AppMsg::Error(format!("Launch Failed: {}", e)));
                                 }
-
-                                // Game Dir
-                                let game_dir = if let Some(dir) = &profile_clone.game_dir {
-                                    std::path::PathBuf::from(dir)
-                                } else {
-                                    launcher_clone.config.minecraft_dir.join("instances").join(&profile_name_clone)
-                                };
-                                if !game_dir.exists() {
-                                    let _ = std::fs::create_dir_all(&game_dir);
-                                }
-
-                                // Launch
-                                match launcher_clone.launch_minecraft(
-                                    &version_to_launch,
-                                    &profile_clone.username,
-                                    profile_clone.ram_mb,
-                                    &game_dir
-                                ).await {
-                                    Ok(mut command) => {
-                                        match command.spawn() {
-                                            Ok(mut child) => {
-                                                sender_clone.input(AppMsg::GameStarted);
-                                                let start_time = std::time::Instant::now();
-                                                let stdout = child.stdout.take();
-                                                let stderr = child.stderr.take();
-
-                                                if let Some(stdout) = stdout {
-                                                    let sender_log = sender_clone.clone();
-                                                    let mut reader = BufReader::new(stdout).lines();
-                                                    tokio::spawn(async move {
-                                                        while let Ok(Some(line)) = reader.next_line().await {
-                                                            sender_log.input(AppMsg::Log(line));
-                                                        }
-                                                    });
-                                                }
-                                                if let Some(stderr) = stderr {
-                                                    let sender_log = sender_clone.clone();
-                                                    let mut reader = BufReader::new(stderr).lines();
-                                                    tokio::spawn(async move {
-                                                        while let Ok(Some(line)) = reader.next_line().await {
-                                                            sender_log.input(AppMsg::Log(format!("[ERR] {}", line)));
-                                                        }
-                                                    });
-                                                }
-
-                                                let _ = child.wait().await;
-                                                let duration = start_time.elapsed().as_secs();
-                                                sender_clone.input(AppMsg::SessionEnded(profile_name_clone, duration));
-                                                sender_clone.input(AppMsg::LaunchCompleted);
-                                            }
-                                            Err(e) => sender_clone.input(AppMsg::Error(format!("Failed to spawn: {}", e))),
-                                        }
-                                    }
-                                    Err(e) => sender_clone.input(AppMsg::Error(format!("Failed to launch: {}", e))),
-                                }
-                            });
+                            }
                         });
                     }
                 }
@@ -648,17 +672,14 @@ impl SimpleComponent for AppModel {
                              let version_id = profile.version.clone();
                              self.state = AppState::Downloading { version: version_id.clone(), progress: 0.0, status: "Downloading Java...".to_string() };
 
-                             std::thread::spawn(move || {
-                                  let rt = tokio::runtime::Runtime::new().unwrap();
-                                  rt.block_on(async {
-                                      let sender_clone_2 = sender_clone.clone();
-                                      match launcher_clone.prepare_java(&version_id, move |pct, msg| {
-                                           sender_clone_2.input(AppMsg::DownloadProgress(pct, msg));
-                                      }).await {
-                                           Ok(_) => sender_clone.input(AppMsg::LaunchProfile(profile_name_clone)),
-                                           Err(e) => sender_clone.input(AppMsg::Error(format!("Failed to download Java: {}", e))),
-                                      }
-                                  });
+                             self.rt.spawn(async move {
+                                  let sender_clone_2 = sender_clone.clone();
+                                  match launcher_clone.prepare_java(&version_id, move |pct, msg| {
+                                       sender_clone_2.input(AppMsg::DownloadProgress(pct, msg));
+                                  }).await {
+                                       Ok(_) => sender_clone.input(AppMsg::LaunchProfile(profile_name_clone)),
+                                       Err(e) => sender_clone.input(AppMsg::Error(format!("Failed to download Java: {}", e))),
+                                  }
                              });
                          }
                      }
@@ -669,6 +690,9 @@ impl SimpleComponent for AppModel {
             }
             AppMsg::UsernameChanged(username) => {
                 self.input_username = username;
+            }
+            AppMsg::RamChanged(ram) => {
+                self.input_ram = ram;
             }
             AppMsg::VersionSelected(version) => {
                 use crate::utils::is_at_least_1_14;
@@ -722,7 +746,7 @@ impl SimpleComponent for AppModel {
 
                 self.input_username.clear();
                 self.input_version = None;
-                self.input_ram = 2048;
+                self.input_ram = 4096;
                 self.input_install_fabric = false;
                 self.fabric_switch_enabled = false;
 
@@ -743,12 +767,24 @@ impl SimpleComponent for AppModel {
             }
             AppMsg::ThemeSelected(theme) => {
                 self.settings.theme = theme.clone();
-                if let Some(_window) = &self.window {
+                if let Some(window) = &self.window {
                     let style_manager = adw::StyleManager::default();
+                    
+                    // Reset CSS provider if stored? Since we don't store it, we just add.
+                    // A better approach for "Total Black" is just forcing dark and adding a provider.
+                    // For now, let's just try setting the scheme.
+                    
+                    // Reset classes
+                    window.remove_css_class("transparent-window");
+
                     match theme {
                         Theme::Dark => style_manager.set_color_scheme(adw::ColorScheme::ForceDark),
                         Theme::Light => style_manager.set_color_scheme(adw::ColorScheme::ForceLight),
                         Theme::System => style_manager.set_color_scheme(adw::ColorScheme::Default),
+                        Theme::Transparent => {
+                            style_manager.set_color_scheme(adw::ColorScheme::ForceDark);
+                            window.add_css_class("transparent-window");
+                        }
                     }
                 }
                 self.save_settings();
@@ -756,7 +792,7 @@ impl SimpleComponent for AppModel {
             AppMsg::OpenMinecraftFolder => {
                 if let Some(launcher) = &self.launcher {
                      let dir = launcher.config.minecraft_dir.clone();
-                     std::thread::spawn(move || { let _ = std::process::Command::new("xdg-open").arg(dir).spawn(); });
+                    self.rt.spawn(async move { let _ = open::that(dir); });
                 }
             }
             AppMsg::RequestDeleteProfile(profile_name) => {
@@ -1012,7 +1048,7 @@ impl SimpleComponent for AppModel {
              }
              AppMsg::OpenModrinthPage(project_id) => {
                  let url = format!("https://modrinth.com/mod/{}", project_id);
-                 let _ = std::process::Command::new("xdg-open").arg(url).spawn();
+                let _ = open::that(url);
              }
             _ => {}
         }
@@ -1092,8 +1128,8 @@ impl SimpleComponent for AppModel {
         }
 
         // Common updates
-        widgets.logs_button.set_visible(self.settings.nerd_mode);
-        widgets.nerd_mode_switch.set_active(self.settings.nerd_mode);
+        widgets.logs_button.set_visible(!self.settings.hide_logs);
+        widgets.hide_logs_switch.set_active(self.settings.hide_logs);
         widgets.mods_button.set_visible(!self.settings.hide_mods_button);
         widgets.hide_mods_switch.set_active(self.settings.hide_mods_button);
 
@@ -1101,6 +1137,7 @@ impl SimpleComponent for AppModel {
             Theme::System => 0,
             Theme::Light => 1,
             Theme::Dark => 2,
+            Theme::Transparent => 3,
         };
         if widgets.theme_combo.selected() != theme_index {
             widgets.theme_combo.set_selected(theme_index);

@@ -15,7 +15,7 @@ impl ModrinthClient {
     pub fn new() -> Self {
         Self {
             client: Client::builder()
-                .user_agent("rcraft/1.0.0 (rcraft@gmail.com)") // fake email. just for modrinth
+                .user_agent("rcraft/1.1.0 (rcraft@gmail.com)") // fake email. just for modrinth
                 .build()
                 .unwrap_or_default(),
         }

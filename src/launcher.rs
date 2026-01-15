@@ -1,46 +1,38 @@
 use anyhow::{anyhow, Result};
 
-use serde::Deserialize;
 
 use std::path::{Path, PathBuf};
-use std::process::{Command as StdCommand, Stdio};
+use std::process::{Stdio};
 use tokio::fs;
 use tokio::process::Command as TokioCommand;
 
 use crate::config::LauncherConfig;
-use crate::models::{AssetIndex, Library, MinecraftVersion, VersionManifest};
-use crate::utils::{is_library_allowed, is_at_least_1_8};
+use crate::models::{MinecraftVersion, VersionManifest, VersionJson, AssetIndexFile};
+use crate::library_manager::LibraryManager;
+use crate::utils::is_library_allowed;
 use crate::java_manager::JavaManager;
+use tokio::io::AsyncWriteExt;
+use futures::stream::{self, StreamExt};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct MinecraftLauncher {
     pub config: LauncherConfig,
+    pub java_manager: JavaManager,
+    pub library_manager: LibraryManager,
 }
 
-#[derive(Deserialize)]
-struct VersionJson {
-    #[serde(rename = "inheritsFrom")]
-    inherits_from: Option<String>,
-    #[serde(rename = "javaVersion")]
-    java_version: Option<JavaVersion>,
-    #[serde(default)]
-    libraries: Vec<Library>,
-    #[serde(rename = "mainClass")]
-    main_class: Option<String>,
-    #[serde(rename = "assetIndex")]
-    asset_index: Option<AssetIndex>,
-}
-
-#[derive(Deserialize)]
-struct JavaVersion {
-    #[serde(rename = "majorVersion")]
-    major_version: u32,
-}
 
 impl MinecraftLauncher {
     pub fn new() -> Result<Self> {
+        let config = LauncherConfig::new()?;
+        let java_manager = JavaManager::new(config.runtimes_dir.clone());
+        let library_manager = LibraryManager::new(config.versions_dir.clone());
         Ok(Self {
-            config: LauncherConfig::new()?,
+            config,
+            java_manager,
+            library_manager,
         })
     }
 
@@ -67,8 +59,15 @@ impl MinecraftLauncher {
         if !version_file.exists() {
              // Fallback heuristic if file not found (e.g. before download?)
              // Should not happen as we download first.
+             // Should not happen as we download first.
              // But let's assume standard heuristic
-             let parts: Vec<&str> = version.split('.').collect();
+             let version_id = if version.contains("fabric") || version.contains("quilt") || version.contains("forge") {
+                  version.split('-').last().unwrap_or(version)
+             } else {
+                  version
+             };
+
+             let parts: Vec<&str> = version_id.split('.').collect();
              if parts.len() >= 2 {
                 if let Ok(minor) = parts[1].parse::<u32>() {
                     if minor >= 20 {
@@ -106,7 +105,13 @@ impl MinecraftLauncher {
         }
 
         // Fallback heuristic check on the ID itself if it looks like a vanilla version
-        let parts: Vec<&str> = version.split('.').collect();
+        let version_id = if version.contains("fabric") || version.contains("quilt") || version.contains("forge") {
+             version.split('-').last().unwrap_or(version)
+        } else {
+             version
+        };
+
+        let parts: Vec<&str> = version_id.split('.').collect();
         if parts.len() >= 2 {
             if let Ok(minor) = parts[1].parse::<u32>() {
                 if minor >= 20 {
@@ -137,13 +142,12 @@ impl MinecraftLauncher {
         let required_version = self.get_required_java_version(version).await?;
         
         // Try to find valid java locally
-        if let Ok(path) = self.find_java(Some(required_version)) {
+        if let Ok(path) = self.java_manager.find_java(Some(required_version)) {
             return Ok(path);
         }
         
         // Not found, download
-        let manager = JavaManager::new(self.config.runtimes_dir.clone());
-        let path = manager.download_and_install_java(required_version, on_progress).await?;
+        let path = self.java_manager.download_and_install_java(required_version, on_progress).await?;
         
         Ok(path)
     }
@@ -151,7 +155,7 @@ impl MinecraftLauncher {
     pub async fn build_classpath(&self, start_version: &str) -> Result<String> {
         let mut classpath_paths: Vec<PathBuf> = Vec::new();
         let mut seen_artifacts: std::collections::HashSet<String> = std::collections::HashSet::new(); // group:artifact
-        let os_name = "linux";
+        let os_name = crate::utils::get_os_name();
 
         let mut current_version_id = Some(start_version.to_string());
         let mut vanilla_jar_path: Option<PathBuf> = None;
@@ -229,6 +233,7 @@ impl MinecraftLauncher {
             classpath_paths.push(jar);
         }
 
+
         let cp_string = classpath_paths
             .iter()
             .map(|p| p.display().to_string())
@@ -238,10 +243,140 @@ impl MinecraftLauncher {
         Ok(cp_string)
     }
 
-    pub async fn launch_minecraft(&self, version: &str, username: &str, ram_mb: u32, game_dir: &Path) -> Result<TokioCommand> {
-        if !is_at_least_1_8(version) {
-             return Err(anyhow!("Versions below 1.8 are not supported"));
+    async fn download_file(url: &str, path: &Path) -> Result<()> {
+        if path.exists() {
+            return Ok(());
         }
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).await?;
+        }
+        let response = reqwest::get(url).await?;
+        if !response.status().is_success() {
+             return Err(anyhow!("Failed to download file from {}: {}", url, response.status()));
+        }
+        let bytes = response.bytes().await?;
+        
+        // Ensure parent dir exists again just in case (race condition in parallel)
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).await?;
+        }
+
+        let mut file = fs::File::create(path).await?;
+        file.write_all(&bytes).await?;
+        Ok(())
+    }
+
+    pub async fn prepare_assets<F>(&self, version_json: &VersionJson, on_progress: Option<F>) -> Result<()> 
+    where F: Fn(f64, String) + Send + Sync + 'static + Clone
+    {
+        if let Some(asset_index) = &version_json.asset_index {
+            let indexes_dir = self.config.assets_dir.join("indexes");
+            let index_path = indexes_dir.join(format!("{}.json", asset_index.id));
+            
+            Self::download_file(&asset_index.url, &index_path).await?;
+
+            let index_content = fs::read_to_string(&index_path).await?;
+            let index: AssetIndexFile = serde_json::from_str(&index_content)?;
+
+            let objects_dir = self.config.assets_dir.join("objects");
+            let legacy_virtual_dir = self.config.assets_dir.join("virtual/legacy");
+            
+            if index.is_virtual {
+                fs::create_dir_all(&legacy_virtual_dir).await?;
+            }
+
+            // Collect all objects that need processing
+            let mut pending_objects = Vec::new();
+            for (name, object) in index.objects {
+                 // Check if we need to download or copy virtual
+                 let hash_head = &object.hash[0..2];
+                 let object_path = objects_dir.join(hash_head).join(&object.hash);
+                 
+                 let needs_download = !object_path.exists();
+                 let needs_virtual = index.is_virtual && !legacy_virtual_dir.join(&name).exists();
+                 
+                 if needs_download || needs_virtual {
+                     pending_objects.push((name, object, object_path, needs_download, needs_virtual));
+                 }
+            }
+
+            let total_items = pending_objects.len();
+            let processed_count = Arc::new(AtomicUsize::new(0));
+            
+            if total_items > 0 {
+                if let Some(cb) = &on_progress {
+                    cb(0.0, format!("Downloading {} assets...", total_items));
+                }
+
+                // Concurrent download using buffered stream
+                let bodies = stream::iter(pending_objects)
+                    .map(|(name, object, object_path, needs_download, needs_virtual)| {
+                        let processed_count = processed_count.clone();
+                        let on_progress = on_progress.clone();
+                        let legacy_virtual_dir = legacy_virtual_dir.clone();
+                        
+                        async move {
+                            if needs_download {
+                                 let hash_head = &object.hash[0..2];
+                                 let url = format!("https://resources.download.minecraft.net/{}/{}", hash_head, object.hash);
+                                 if let Err(e) = Self::download_file(&url, &object_path).await {
+                                     eprintln!("Failed to download asset {}: {}", name, e);
+                                     // Continue anyway, don't fail everything for one asset
+                                 }
+                            }
+
+                            if needs_virtual {
+                                let virtual_path = legacy_virtual_dir.join(&name);
+                                if !virtual_path.exists() {
+                                    if let Some(parent) = virtual_path.parent() {
+                                        let _ = fs::create_dir_all(parent).await;
+                                    }
+                                    let _ = fs::copy(&object_path, &virtual_path).await;
+                                }
+                            }
+                            
+                            let current = processed_count.fetch_add(1, Ordering::SeqCst) + 1;
+                            if current % 50 == 0 || current == total_items {
+                                 if let Some(cb) = &on_progress {
+                                     let pct = (current as f64 / total_items as f64) * 100.0; // using 0-100 logic or 0-1? usage suggests 0-1
+                                     // Actually existing usage in java_manager seems to be 0.0-1.0
+                                     // But let's check prepare_java usage: 0.1, 0.7... so 0.0-1.0
+                                      cb(current as f64 / total_items as f64, format!("Downloading assets: {}/{}", current, total_items));
+                                 }
+                            }
+                        }
+                    })
+                    .buffer_unordered(20); // Parallel downloads
+
+                bodies.collect::<Vec<()>>().await;
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn ensure_version_ready(&self, version: &str) -> Result<()> {
+        let version_dir = self.config.versions_dir.join(version);
+        let version_file = version_dir.join(format!("{}.json", version));
+
+        if version_file.exists() {
+            return Ok(());
+        }
+
+        // Need to find URL from manifest
+        let manifest = self.get_available_versions().await?; 
+        let version_info = manifest.iter().find(|v| v.id == version);
+
+        if let Some(v_info) = version_info {
+             Self::download_file(&v_info.url, &version_file).await?;
+             Ok(())
+        } else {
+             Err(anyhow!("Version {} not found in manifest", version))
+        }
+    }
+
+
+    pub async fn launch_minecraft(&self, version: &str, username: &str, ram_mb: u32, game_dir: &Path) -> Result<TokioCommand> {
+        self.ensure_version_ready(version).await?;
 
         let version_dir = self.config.versions_dir.join(version);
         let version_file = version_dir.join(format!("{}.json", version));
@@ -250,104 +385,60 @@ impl MinecraftLauncher {
         let version_json: VersionJson = serde_json::from_str(&version_data)?;
         
         let required_java = self.get_required_java_version(version).await?;
-        let java_path = self.find_java(Some(required_java))?;
+        let java_path = self.java_manager.find_java(Some(required_java))?;
 
         let jar_version = version_json.inherits_from.as_deref().unwrap_or(version);
         let jar_dir = self.config.versions_dir.join(jar_version);
         let jar_path = jar_dir.join(format!("{}.jar", jar_version));
 
-        let natives_version = version_json.inherits_from.as_deref().unwrap_or(version);
-        let natives_dir = self.config.versions_dir.join(natives_version).join("natives");
-
-        if !jar_path.exists() {
-            return Err(anyhow!("Version JAR not found at: {:?}", jar_path));
+        // Create jar directory if it doesn't exist (e.g for new versions)
+        if !jar_dir.exists() {
+             fs::create_dir_all(&jar_dir).await?;
         }
 
-        // Check/Repair Natives
-        // If natives directory is empty or missing, we must ensure natives are extracted.
-        // This is crucial if the version was downloaded before the extraction logic fix was applied.
-        let natives_ok = natives_dir.exists() && std::fs::read_dir(&natives_dir).map(|c| c.count() > 0).unwrap_or(false);
-        
-        if !natives_ok {
-            // Re-run library processing for this version to extract natives
-             println!("Natives missing for {}, attempting repair...", natives_version);
-             let version_file_native = self.config.versions_dir.join(natives_version).join(format!("{}.json", natives_version));
-             if version_file_native.exists() {
-                 let v_data = fs::read_to_string(&version_file_native).await?;
-                 let v_json: VersionJson = serde_json::from_str(&v_data)?;
-                 let os_name = "linux"; // we know we are on linux
-                 
-                 for lib in v_json.libraries {
-                     // COPY OF EXTRACTION LOGIC
-                    let mut native_artifact = None;
-                    if let Some(natives) = &lib.natives {
-                         if let Some(classifier) = natives.get(os_name) {
-                             if let Some(downloads) = &lib.downloads {
-                                 if let Some(classifiers) = &downloads.classifiers {
-                                     if let Some(artifact) = classifiers.get(classifier) {
-                                         native_artifact = Some(artifact.clone());
-                                     }
-                                 }
-                             }
-                         }
-                    }
-                    if native_artifact.is_none() {
-                         if let Some(downloads) = &lib.downloads {
-                             if let Some(classifiers) = &downloads.classifiers {
-                                 if let Some(artifact) = classifiers.get("natives-linux") {
-                                     native_artifact = Some(artifact.clone());
-                                 }
-                             }
-                         }
-                    }
-                    if native_artifact.is_none() {
-                         if let Some(downloads) = &lib.downloads {
-                             if let Some(artifact) = &downloads.artifact {
-                                 if artifact.path.contains("natives-linux") || lib.name.contains("natives-linux") {
-                                     native_artifact = Some(artifact.clone());
-                                 }
-                             }
-                         }
-                    }
-                    
-                    if let Some(artifact) = native_artifact {
-                         let native_zip_path = self.config.versions_dir.join(natives_version).join(format!("{}.zip", lib.name.replace(":", "_")));
-                         if !native_zip_path.exists() {
-                            if let Ok(resp) = reqwest::get(&artifact.url).await {
-                                if let Ok(bytes) = resp.bytes().await {
-                                     let _ = tokio::fs::write(&native_zip_path, &bytes).await;
-                                }
-                            }
-                         }
-                         if native_zip_path.exists() {
-                             let nd = natives_dir.clone();
-                             let nzp = native_zip_path.clone();
-                             let exclude = lib.get_extract().map(|e| e.exclude.clone()).unwrap_or_default();
-                             
-                             let _ = tokio::task::spawn_blocking(move || {
-                                 if let Ok(file) = std::fs::File::open(&nzp) {
-                                     if let Ok(mut archive) = zip::ZipArchive::new(file) {
-                                          for i in 0..archive.len() {
-                                             if let Ok(mut file) = archive.by_index(i) {
-                                                  let name = file.name().to_string();
-                                                  let excluded = exclude.iter().any(|ex| name.starts_with(ex));
-                                                  if excluded || name.ends_with("/") { continue; }
-                                                  let filename = std::path::Path::new(&name).file_name().and_then(|f| f.to_str()).unwrap_or(&name).to_string();
-                                                  let outpath = nd.join(&filename);
-                                                  if let Some(parent) = outpath.parent() { let _ = std::fs::create_dir_all(parent); }
-                                                  if let Ok(mut outfile) = std::fs::File::create(&outpath) {
-                                                      let _ = std::io::copy(&mut file, &mut outfile);
-                                                  }
-                                             }
-                                          }
-                                     }
-                                 }
-                             }).await;
-                         }
-                    }
+        // If inheriting, ensure parent JSON is ready (so we can get download URL if needed)
+        if jar_version != version {
+             self.ensure_version_ready(jar_version).await?;
+        }
+
+        // Check/Download JAR
+        if !jar_path.exists() {
+             // Determine which JSON has the download URL
+             let source_json = if jar_version == version {
+                 version_json.clone()
+             } else {
+                 let v_dir = self.config.versions_dir.join(jar_version);
+                 let v_file = v_dir.join(format!("{}.json", jar_version));
+                 let d = fs::read_to_string(&v_file).await?;
+                 serde_json::from_str(&d)?
+             };
+
+             if let Some(downloads) = &source_json.downloads {
+                 if let Some(client) = &downloads.client {
+                     Self::download_file(&client.url, &jar_path).await?;
                  }
              }
         }
+
+        if !jar_path.exists() {
+            // If still not exists, try to fallback to main version jar if inherits is present but we are launching child
+             return Err(anyhow!("Version JAR not found at: {:?} and no download URL available", jar_path));
+        }
+
+        let natives_version = version_json.inherits_from.as_deref().unwrap_or(version);
+        let natives_dir = self.config.versions_dir.join(natives_version).join("natives");
+
+
+
+        // Check/Repair Natives
+        self.library_manager.check_and_extract_natives(natives_version).await?;
+
+        // Check/Download Libraries
+        self.library_manager.check_and_download_libraries(natives_version).await?;
+
+        // Prepare Assets (Download & Virtualize if needed)
+        // For launch_minecraft direct call we don't report progress, maybe todo later
+        self.prepare_assets(&version_json, None::<fn(f64, String)>).await?;
 
         let mut main_class = version_json.main_class.clone();
         let mut asset_index_id = version_json.asset_index.as_ref().map(|a| a.id.clone());
@@ -404,248 +495,97 @@ impl MinecraftLauncher {
         Ok(command)
     }
 
-    fn get_java_version(&self, path: &Path) -> Result<u32> {
-        let output = StdCommand::new(path)
-            .arg("-version")
-            .output()?;
+    // High Level Launch Orchestration
+    pub async fn prepare_and_launch<F>(
+        &self, 
+        base_version: String, 
+        username: String, 
+        ram_mb: u32,
+        is_fabric: bool,
+        game_dir_override: Option<PathBuf>,
+        on_progress: F
+    ) -> Result<TokioCommand> 
+    where F: Fn(f64, String) + Send + Sync + 'static + Clone
+    {
+        let mut version_to_launch = base_version.clone();
         
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        // Example output: openjdk version "17.0.1" ...
-        // or: java version "1.8.0_..."
+        // 1. Check JAVA FIRST (Before Fabric)
+        // We need Java to install Fabric anyway, and we need to know if we have it to launch.
+        // We check against base_version first.
         
-        for line in stderr.lines() {
-            if line.contains("version") {
-                let parts: Vec<&str> = line.split('"').collect();
-                if parts.len() >= 2 {
-                    let version_str = parts[1];
-                    if version_str.starts_with("1.") {
-                         // 1.8.0 -> 8
-                         if let Some(minor) = version_str.split('.').nth(1) {
-                             if let Ok(v) = minor.parse::<u32>() {
-                                 return Ok(v);
-                             }
-                         }
-                    } else {
-                        // 17.0.1 -> 17
-                        if let Some(major) = version_str.split('.').next() {
-                            if let Ok(v) = major.parse::<u32>() {
-                                return Ok(v);
-                            }
-                        }
-                    }
-                }
+        on_progress(0.1, "Verifying Java...".into());
+        let required_java = self.get_required_java_version(&base_version).await?;
+        
+        let java_p = match self.java_manager.find_java(Some(required_java)) {
+            Ok(p) => p,
+            Err(_) => {
+                 return Err(anyhow!("Java Runtime {} is missing. Please ensure it is installed.", required_java));
             }
-        }
-        anyhow::bail!("Could not parse Java version")
-    }
+        };
 
-    pub fn find_java(&self, required_version: Option<u32>) -> Result<PathBuf> {
-        let mut candidates = vec![
-            "java".to_string(),
-            "/usr/bin/java".to_string(),
-            "/usr/local/bin/java".to_string(),
-            "/opt/java/bin/java".to_string(),
-        ];
-        
-        // Add specific version candidates if requirement is known
-        if let Some(ver) = required_version {
-            candidates.insert(0, format!("java-{}", ver));
-            candidates.insert(0, format!("java{}", ver));
-            
-            // Common linux paths for specific versions
-             candidates.push(format!("/usr/lib/jvm/java-{}-openjdk-amd64/bin/java", ver));
-             candidates.push(format!("/usr/lib/jvm/java-{}-openjdk/bin/java", ver));
-             // Also try 1.8.0 naming convention for Java 8
-             if ver == 8 {
-                 candidates.push("/usr/lib/jvm/java-1.8.0-openjdk-amd64/bin/java".to_string());
-                 candidates.push("/usr/lib/jvm/java-1.8.0-openjdk/bin/java".to_string());
-             }
-        } else {
-            // Default checks if no version specified (shouldn't happen with new logic but safe fallback)
-            candidates.insert(0, "java8".to_string()); 
-             candidates.push("/usr/lib/jvm/java-8-openjdk-amd64/bin/java".to_string());
-             candidates.push("/usr/lib/jvm/java-8-openjdk-i386/bin/java".to_string());
-        }
-
-        // Check environment variable
-        if let Ok(java_home) = std::env::var("JAVA_HOME") {
-            let path = PathBuf::from(java_home).join("bin").join("java");
-             candidates.insert(0, path.display().to_string());
-        }
-
-        // Check runtimes directory (managed java)
-        let runtime_java = self.config.runtimes_dir.join(format!("java-{}", required_version.unwrap_or(8))).join("bin").join("java");
-        if runtime_java.exists() {
-             candidates.insert(0, runtime_java.display().to_string());
-        }
-
-        let mut found_path: Option<PathBuf> = None;
-        let mut found_version: u32 = 0;
-        let mut seen_paths = std::collections::HashSet::new();
-
-        // 1. Check specific candidates
-        for path_str in candidates {
-            let path = if path_str.contains("/") {
-                 PathBuf::from(&path_str)
-            } else {
-                 // Determine path from command
-                 if let Ok(output) = StdCommand::new("which").arg(&path_str).output() {
-                    if output.status.success() {
-                        let p = String::from_utf8(output.stdout).unwrap_or_default().trim().to_string();
-                        if p.is_empty() { continue; }
-                         PathBuf::from(p)
-                    } else {
-                        continue;
-                    }
-                 } else {
-                     continue;
-                 }
-            };
-
-            if path.exists() {
-                 if let Ok(path_abs) = std::fs::canonicalize(&path) {
-                     if seen_paths.contains(&path_abs) { continue; }
-                     seen_paths.insert(path_abs.clone());
-
-                     if let Ok(ver) = self.get_java_version(&path_abs) {
-                          if let Some(req) = required_version {
-                              if ver == req {
-                                  return Ok(path_abs);
-                              }
-                              found_path = Some(path_abs.clone());
-                              found_version = ver;
-                          } else {
-                              return Ok(path_abs);
-                          }
-                     }
-                 }
-            }
-        }
-
-        // 2. Scan /usr/lib/jvm if required version not found yet
-        if let Some(req) = required_version {
-            if let Ok(entries) = std::fs::read_dir("/usr/lib/jvm") {
-                for entry in entries.flatten() {
-                    let path = entry.path().join("bin").join("java");
-                    if path.exists() {
-                        if let Ok(path_abs) = std::fs::canonicalize(&path) {
-                             if seen_paths.contains(&path_abs) { continue; }
-                             seen_paths.insert(path_abs.clone());
-
-                             if let Ok(ver) = self.get_java_version(&path_abs) {
-                                  if ver == req {
-                                      return Ok(path_abs);
-                                  }
-                                  // Update found path if we haven't found anything yet, or just to track
-                                  if found_path.is_none() {
-                                      found_path = Some(path_abs);
-                                      found_version = ver;
-                                  }
-                             }
-                        }
-                    }
-                }
-            }
-        }
-        
-        if let Some(req) = required_version {
-             let msg = if let Some(p) = found_path {
-                 format!("Minecraft requires Java {} (found Java {} at {:?}). Please install Java {}.", req, found_version, p, req)
+        // 2. Handle Fabric
+        if is_fabric {
+             on_progress(0.2, "Checking Fabric...".into());
+             // Check if fabric version already exists for this base version
+             let fabric_installed = self.find_installed_fabric_version(&base_version).await;
+             
+             if let Some(fabric_id) = fabric_installed {
+                 version_to_launch = fabric_id;
              } else {
-                 format!("Minecraft requires Java {} but it was not found on your system. Please install Java {}.", req, req)
-             };
-             return Err(anyhow!(msg));
-        }
-
-        anyhow::bail!("Could not find installed Java")
-    }
-
-    #[allow(dead_code)]
-    pub fn get_installed_java_versions(&self) -> Vec<String> {
-        let candidates = vec![
-            "java".to_string(),
-            "/usr/bin/java".to_string(),
-            "/usr/local/bin/java".to_string(),
-            "/opt/java/bin/java".to_string(),
-            "/usr/lib/jvm/java-8-openjdk-amd64/bin/java".to_string(),
-            "/usr/lib/jvm/java-11-openjdk-amd64/bin/java".to_string(),
-            "/usr/lib/jvm/java-17-openjdk-amd64/bin/java".to_string(),
-            "/usr/lib/jvm/java-21-openjdk-amd64/bin/java".to_string(),
-            "/usr/lib/jvm/java-8-openjdk/bin/java".to_string(),
-            "/usr/lib/jvm/java-17-openjdk/bin/java".to_string(),
-        ];
-
-        let mut found_versions = Vec::new();
-        let mut seen_paths = std::collections::HashSet::new();
-
-        // Check environment variable
-        if let Ok(java_home) = std::env::var("JAVA_HOME") {
-            let path = PathBuf::from(java_home).join("bin").join("java");
-            if path.exists() {
-                 if let Ok(path_abs) = std::fs::canonicalize(&path) {
-                    if seen_paths.insert(path_abs.clone()) {
-                        if let Ok(ver) = self.get_java_version(&path_abs) {
-                            found_versions.push(format!("Java {} ({})", ver, path_abs.display()));
-                        }
-                    }
+                 on_progress(0.3, "Installing Fabric...".into());
+                 // Pass the java we found
+                 match self.install_fabric(&base_version, Some(java_p.clone())).await {
+                    Ok(new_id) => version_to_launch = new_id,
+                    Err(e) => return Err(anyhow!("Failed to install Fabric: {}", e)),
                  }
-            }
-        }
-
-        // Check candidates
-        for path_str in candidates {
-            let path = if path_str.contains("/") {
-                 PathBuf::from(&path_str)
-            } else {
-                 if let Ok(output) = StdCommand::new("which").arg(&path_str).output() {
-                    if output.status.success() {
-                        let p = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                         PathBuf::from(p)
-                    } else {
-                        continue;
-                    }
-                 } else {
-                     continue;
-                 }
-            };
-
-            if path.exists() {
-                 if let Ok(path_abs) = std::fs::canonicalize(&path) {
-                     if seen_paths.contains(&path_abs) {
-                         continue;
-                     }
-                     seen_paths.insert(path_abs.clone());
-
-                     // Get version
-                     if let Ok(ver) = self.get_java_version(&path_abs) {
-                          found_versions.push(format!("Java {} ({})", ver, path_abs.display()));
-                     }
-                 }
-            }
+             }
         }
         
-        // Try scanning /usr/lib/jvm for other versions
-        if let Ok(entries) = std::fs::read_dir("/usr/lib/jvm") {
-            for entry in entries.flatten() {
-                let path = entry.path().join("bin").join("java");
-                if path.exists() {
-                    if let Ok(path_abs) = std::fs::canonicalize(&path) {
-                         if seen_paths.contains(&path_abs) {
-                             continue;
-                         }
-                         seen_paths.insert(path_abs.clone());
-                         if let Ok(ver) = self.get_java_version(&path_abs) {
-                              found_versions.push(format!("Java {} ({})", ver, path_abs.display()));
-                         }
+        // 3. Prepare Game Dir
+        let game_dir = if let Some(dir) = game_dir_override {
+            dir
+        } else {
+            // Default instance dir based on profile/version (logic was in UI, but cleaner here if we pass profile name?)
+            // If simple launch, maybe just use .minecraft? No, better use isolated instances if possible.
+            // But preserving old logic: in UI code it was `instances/profile_name` or `game_dir` from profile.
+            // We'll trust the caller passed the right dir.
+            self.config.minecraft_dir.clone()
+        };
+        
+        if !game_dir.exists() {
+             let _ = fs::create_dir_all(&game_dir).await;
+        }
+
+        on_progress(0.4, "Launching Game...".into());
+        // 4. Launch
+        
+        // We reuse the lower level launch_minecraft but passing our resolved version
+        let cmd = self.launch_minecraft(
+            &version_to_launch,
+            &username,
+            ram_mb,
+            &game_dir
+        ).await;
+
+        on_progress(1.0, "Game Started".into());
+        cmd
+    }
+
+    pub async fn find_installed_fabric_version(&self, mc_version: &str) -> Option<String> {
+         if let Ok(mut entries) = tokio::fs::read_dir(&self.config.versions_dir).await {
+            while let Ok(Some(entry)) = entries.next_entry().await {
+                if let Some(name) = entry.file_name().to_str() {
+                    if name.contains("fabric-loader") && name.ends_with(&format!("-{}", mc_version)) {
+                        return Some(name.to_string());
                     }
                 }
             }
         }
-
-        found_versions
+        None
     }
 
-    pub async fn install_fabric(&self, mc_version: &str) -> Result<String> {
+
+    pub async fn install_fabric(&self, mc_version: &str, java_path_buf: Option<PathBuf>) -> Result<String> {
         // 1. Download Fabric Installer
         let installer_url = "https://maven.fabricmc.net/net/fabricmc/fabric-installer/1.1.0/fabric-installer-1.1.0.jar";
         let cache_dir = self.config.minecraft_dir.join("cache");
@@ -660,7 +600,11 @@ impl MinecraftLauncher {
             out.write_all(&bytes).await?;
         }
 
-        let java_path = self.find_java(None)?;
+        let java_path = if let Some(p) = java_path_buf {
+            p
+        } else {
+             self.java_manager.find_java(None)?
+        };
 
         let mut command = TokioCommand::new(java_path);
         command

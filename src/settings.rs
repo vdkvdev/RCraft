@@ -7,7 +7,7 @@ use crate::models::Theme;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
     pub theme: Theme,
-    pub nerd_mode: bool,
+    pub hide_logs: bool,
     pub sidebar_collapsed: bool,
     pub hide_mods_button: bool,
 }
@@ -16,7 +16,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             theme: Theme::System,
-            nerd_mode: false,
+            hide_logs: false,
             sidebar_collapsed: false,
             hide_mods_button: false,
         }

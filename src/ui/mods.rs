@@ -6,13 +6,29 @@ use crate::ui::msg::AppMsg;
 use crate::models::ModSearchResult;
 
 pub fn create_mods_page(sender: &ComponentSender<AppModel>) -> (gtk::Box, gtk::SearchEntry, gtk::Button, gtk::Stack, gtk::ListBox, gtk::ListBox, gtk::DropDown) {
-    let container = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    let container = gtk::Box::new(gtk::Orientation::Vertical, 24);
+    container.set_margin_all(24);
+    container.set_vexpand(true);
+    container.set_hexpand(true);
+    container.set_halign(gtk::Align::Fill);
+
+    // Title label
+    let title_label = gtk::Label::builder()
+        .label("Mods")
+        .halign(gtk::Align::Start)
+        .css_classes(vec!["title-1".to_string()])
+        .build();
+
+    container.append(&title_label);
 
     let stack = gtk::Stack::new();
     stack.set_transition_type(gtk::StackTransitionType::SlideLeftRight);
+    stack.set_vexpand(true);
+    stack.set_hexpand(true);
+    stack.set_halign(gtk::Align::Fill);
 
     let top_bar = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-    top_bar.set_margin_all(12);
+    // top_bar.set_margin_all(12); // Removed extra margin to align with new container padding
 
     let profile_model = gtk::StringList::new(&[]);
     let profile_dropdown = gtk::DropDown::builder()
@@ -72,40 +88,31 @@ pub fn create_mods_page(sender: &ComponentSender<AppModel>) -> (gtk::Box, gtk::S
     top_bar.append(&browse_button);
 
     let installed_box = gtk::Box::new(gtk::Orientation::Vertical, 12);
-    installed_box.set_margin_all(12);
+    // installed_box.set_margin_all(12); // Removed to fix alignment
+    installed_box.set_vexpand(true);
+    installed_box.set_hexpand(true);
+    installed_box.set_halign(gtk::Align::Fill);
 
     let installed_list = gtk::ListBox::new();
     installed_list.add_css_class("boxed-list");
 
     let installed_scroll = gtk::ScrolledWindow::new();
     installed_scroll.set_vexpand(true);
+    installed_scroll.set_hexpand(true);
+    installed_scroll.set_halign(gtk::Align::Fill);
     installed_scroll.set_child(Some(&installed_list));
 
-    let installed_toolbar = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-    let refresh_button = gtk::Button::builder()
-        .icon_name("view-refresh-symbolic")
-        .tooltip_text("Refresh List")
-        .build();
+    // Toolbar removed as per request
 
-    let sender_clone = sender.clone();
-    refresh_button.connect_clicked(move |_| {
-        sender_clone.input(AppMsg::RefreshInstalledMods);
-    });
-    installed_toolbar.append(&gtk::Label::new(Some("My Mods")));
-    installed_toolbar.append(&gtk::Box::new(gtk::Orientation::Horizontal, 0)); // Spacer?
-
-    let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-    spacer.set_hexpand(true);
-    installed_toolbar.append(&spacer);
-    installed_toolbar.append(&refresh_button);
-
-    installed_box.append(&installed_toolbar);
     installed_box.append(&installed_scroll);
 
     stack.add_named(&installed_box, Some("installed"));
 
     let browse_box = gtk::Box::new(gtk::Orientation::Vertical, 12);
-    browse_box.set_margin_all(12);
+    // browse_box.set_margin_all(12); // Removed to fix alignment
+    browse_box.set_vexpand(true);
+    browse_box.set_hexpand(true);
+    browse_box.set_halign(gtk::Align::Fill);
 
     let search_box = gtk::Box::new(gtk::Orientation::Horizontal, 6);
 
@@ -139,6 +146,8 @@ pub fn create_mods_page(sender: &ComponentSender<AppModel>) -> (gtk::Box, gtk::S
 
     let browse_scroll = gtk::ScrolledWindow::new();
     browse_scroll.set_vexpand(true);
+    browse_scroll.set_hexpand(true);
+    browse_scroll.set_halign(gtk::Align::Fill);
     browse_scroll.set_child(Some(&browse_list));
 
     browse_box.append(&search_box);

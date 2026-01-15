@@ -18,15 +18,7 @@ pub fn compare_versions(a: &str, b: &str) -> Ordering {
     (pa.0, pa.1, pa.2).cmp(&(pb.0, pb.1, pb.2))
 }
 
-pub fn is_at_least_1_8(v: &str) -> bool {
-    let version_str = if v.contains("fabric") {
-        v.split('-').last().unwrap_or(v)
-    } else {
-        v
-    };
-    let p = parse_version(version_str);
-    p.0 > 1 || (p.0 == 1 && p.1 >= 8)
-}
+
 
 pub fn is_at_least_1_14(v: &str) -> bool {
     let p = parse_version(v);
@@ -55,4 +47,25 @@ pub fn is_library_allowed(lib: &Library, os_name: &str) -> bool {
         }
     }
     allowed
+}
+
+pub fn get_os_name() -> &'static str {
+    "linux"
+}
+
+pub fn get_total_memory_mb() -> u64 {
+    if let Ok(meminfo) = std::fs::read_to_string("/proc/meminfo") {
+        for line in meminfo.lines() {
+            if line.starts_with("MemTotal:") {
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() >= 2 {
+                    if let Ok(kb) = parts[1].parse::<u64>() {
+                        return kb / 1024;
+                    }
+                }
+            }
+        }
+    }
+    // Fallback if reading fails
+    8192
 }
